@@ -6,7 +6,7 @@ from sklearn.svm import LinearSVC
 from sklearn.linear_model import LogisticRegression, Lasso
 import warnings
 from sklearn import tree
-import xgboost as xgb
+# import xgboost as xgb
 
 from base_models import NeuralNetwork, ParallelNetworks
 
@@ -68,7 +68,7 @@ def get_relevant_baselines(task_name):
             (NNModel, {"n_neighbors": 3}),
             (DecisionTreeModel, {"max_depth": 4}),
             (DecisionTreeModel, {"max_depth": None}),
-            (XGBoostModel, {}),
+            # (XGBoostModel, {}),
             (AveragingModel, {}),
         ],
     }
@@ -78,7 +78,8 @@ def get_relevant_baselines(task_name):
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, 
+                 sep_token_id=-1, predict_token_id=-2):
         super(TransformerModel, self).__init__()
         configuration = GPT2Config(
             n_positions=2 * n_positions,
@@ -97,6 +98,11 @@ class TransformerModel(nn.Module):
         self._read_in = nn.Linear(n_dims, n_embd)
         self._backbone = GPT2Model(configuration)
         self._read_out = nn.Linear(n_embd, 1)
+        
+        # Special token handling
+        self.sep_token_id = sep_token_id
+        self.predict_token_id = predict_token_id
+        self.special_embeddings = nn.Embedding(2, n_embd)  # 2 special tokens: SEP and PREDICT
 
     @staticmethod
     def _combine(xs_b, ys_b):
@@ -113,20 +119,121 @@ class TransformerModel(nn.Module):
         zs = zs.view(bsize, 2 * points, dim)
         return zs
 
-    def forward(self, xs, ys, inds=None):
+    def _add_special_token_embeddings(self, embeds, sequence_structure):
+        """
+        Add special token embeddings to the input embeddings.
+        
+        Args:
+            embeds: (batch_size, seq_len, n_embd) input embeddings
+            sequence_structure: dict containing special token positions
+            
+        Returns:
+            embeds_with_special: embeddings with special tokens added
+        """
+        if sequence_structure is None:
+            return embeds
+            
+        batch_size, seq_len, n_embd = embeds.shape
+        
+        # Get special token positions (convert from xs/ys space to interleaved space)
+        sep_positions = [pos * 2 for pos in sequence_structure.get('sep_positions', [])]
+        predict_position = sequence_structure.get('predict_position', -1) * 2
+        
+        # Add SEP token embeddings
+        if sep_positions:
+            sep_embed = self.special_embeddings(
+                torch.tensor([0], device=embeds.device)  # 0 for SEP token
+            ).unsqueeze(0).unsqueeze(0)  # (1, 1, n_embd)
+            
+            for pos in sep_positions:
+                if pos < seq_len:
+                    embeds[:, pos] = embeds[:, pos] + sep_embed[0, 0]
+        
+        # Add PREDICT token embedding
+        if predict_position >= 0 and predict_position < seq_len:
+            predict_embed = self.special_embeddings(
+                torch.tensor([1], device=embeds.device)  # 1 for PREDICT token
+            ).unsqueeze(0).unsqueeze(0)  # (1, 1, n_embd)
+            embeds[:, predict_position] = embeds[:, predict_position] + predict_embed[0, 0]
+        
+        return embeds
+
+    def _detect_special_tokens_from_data(self, xs):
+        """
+        Detect special token positions by looking for zero vectors in the input.
+        This provides backward compatibility when sequence_structure is not provided.
+        
+        Args:
+            xs: (batch_size, seq_len, n_dims) input sequence
+            
+        Returns:
+            dict with detected special token positions
+        """
+        batch_size, seq_len, n_dims = xs.shape
+        
+        # Special tokens are zero vectors in the input
+        is_special = (xs == 0).all(dim=-1)  # (batch_size, seq_len)
+        
+        # For simplicity, use the first batch element to detect structure
+        special_positions = torch.where(is_special[0])[0].tolist()
+        
+        # Try to infer structure: SEP tokens come before PREDICT token
+        if len(special_positions) > 0:
+            # Assume last special token is PREDICT, others are SEP
+            predict_position = special_positions[-1]
+            sep_positions = special_positions[:-1]
+            
+            return {
+                'sep_positions': sep_positions,
+                'predict_position': predict_position
+            }
+        
+        return None
+
+    def forward(self, xs, ys, inds=None, sequence_structure=None):
+        if inds is not None and len(inds) == 0:
+            return torch.zeros(xs.shape[0], 0, device=xs.device)
+
         if inds is None:
-            inds = torch.arange(ys.shape[1])
+            inds = torch.arange(ys.shape[1], device=ys.device)
         else:
-            inds = torch.tensor(inds)
-            if max(inds) >= ys.shape[1] or min(inds) < 0:
-                raise ValueError("inds contain indices where xs and ys are not defined")
-        zs = self._combine(xs, ys)
+            inds = torch.tensor(inds, device=ys.device)
+            if len(inds) > 0:
+                valid_inds = [i for i in inds.tolist() if 0 <= i < ys.shape[1]]
+                if len(valid_inds) != len(inds):
+                    print(
+                        f"WARNING: Some indices are out of bounds. Requested: {inds}, "
+                        f"Valid: {valid_inds}"
+                    )
+                    if len(valid_inds) == 0:
+                        return torch.zeros(xs.shape[0], 0, device=xs.device)
+                    inds = torch.tensor(valid_inds, device=ys.device)
+
+        # Mask labels at prediction indices so the model does not see true y there
+        ys_input = ys.clone()
+        if inds is not None and len(inds) > 0:
+            ys_input[:, inds] = 0.0
+
+        zs = self._combine(xs, ys_input)
         embeds = self._read_in(zs)
+        
+        if sequence_structure is not None:
+            embeds = self._add_special_token_embeddings(embeds, sequence_structure)
+         
         output = self._backbone(inputs_embeds=embeds).last_hidden_state
         prediction = self._read_out(output)
-        return prediction[:, ::2, 0][:, inds]  # predict only on xs
+        
+        return prediction[:, 1::2, 0][:, inds]
 
 
+    def get_special_token_info(self):
+        """Return information about special tokens for debugging"""
+        return {
+            'sep_token_id': self.sep_token_id,
+            'predict_token_id': self.predict_token_id,
+            'special_embedding_shape': self.special_embeddings.weight.shape
+        }
+    
 class NNModel:
     def __init__(self, n_neighbors, weights="uniform"):
         # should we be picking k optimally
@@ -439,39 +546,39 @@ class DecisionTreeModel:
         return torch.stack(preds, dim=1)
 
 
-class XGBoostModel:
-    def __init__(self):
-        self.name = "xgboost"
+# class XGBoostModel:
+#     def __init__(self):
+#         self.name = "xgboost"
 
-    # inds is a list containing indices where we want the prediction.
-    # prediction made at all indices by default.
-    def __call__(self, xs, ys, inds=None):
-        xs, ys = xs.cpu(), ys.cpu()
+#     # inds is a list containing indices where we want the prediction.
+#     # prediction made at all indices by default.
+#     def __call__(self, xs, ys, inds=None):
+#         xs, ys = xs.cpu(), ys.cpu()
 
-        if inds is None:
-            inds = range(ys.shape[1])
-        else:
-            if max(inds) >= ys.shape[1] or min(inds) < 0:
-                raise ValueError("inds contain indices where xs and ys are not defined")
+#         if inds is None:
+#             inds = range(ys.shape[1])
+#         else:
+#             if max(inds) >= ys.shape[1] or min(inds) < 0:
+#                 raise ValueError("inds contain indices where xs and ys are not defined")
 
-        preds = []
+#         preds = []
 
-        # i: loop over num_points
-        # j: loop over bsize
-        for i in tqdm(inds):
-            pred = torch.zeros_like(ys[:, 0])
-            if i > 0:
-                pred = torch.zeros_like(ys[:, 0])
-                for j in range(ys.shape[0]):
-                    train_xs, train_ys = xs[j, :i], ys[j, :i]
+#         # i: loop over num_points
+#         # j: loop over bsize
+#         for i in tqdm(inds):
+#             pred = torch.zeros_like(ys[:, 0])
+#             if i > 0:
+#                 pred = torch.zeros_like(ys[:, 0])
+#                 for j in range(ys.shape[0]):
+#                     train_xs, train_ys = xs[j, :i], ys[j, :i]
 
-                    clf = xgb.XGBRegressor()
+#                     clf = xgb.XGBRegressor()
 
-                    clf = clf.fit(train_xs, train_ys)
-                    test_x = xs[j, i : i + 1]
-                    y_pred = clf.predict(test_x)
-                    pred[j] = y_pred[0].item()
+#                     clf = clf.fit(train_xs, train_ys)
+#                     test_x = xs[j, i : i + 1]
+#                     y_pred = clf.predict(test_x)
+#                     pred[j] = y_pred[0].item()
 
-            preds.append(pred)
+#             preds.append(pred)
 
-        return torch.stack(preds, dim=1)
+#         return torch.stack(preds, dim=1)

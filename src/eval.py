@@ -26,7 +26,7 @@ def get_model_from_run(run_path, step=-1, only_conf=False):
     if step == -1:
         state_path = os.path.join(run_path, "state.pt")
         state = torch.load(state_path, map_location='cpu')
-        model.load_state_dict(state["model_state_dict"])
+        model.load_state_dict(state["model_state_dict"], strict=False)
     else:
         model_path = os.path.join(run_path, f"model_{step}.pt")
         state_dict = torch.load(model_path, map_location='cpu')

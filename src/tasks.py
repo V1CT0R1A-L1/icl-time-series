@@ -2,6 +2,7 @@ import math
 
 import torch
 
+import numpy as np
 
 def squared_error(ys_pred, ys):
     return (ys - ys_pred).square()
@@ -61,6 +62,8 @@ def get_task_sampler(
         "relu_2nn_regression": Relu2nnRegression,
         "decision_tree": DecisionTree,
         "ar_warmup": ARWarmup,
+        "multi_context_mixture_linear": MultiContextMixtureLinear,
+        "group_mixture_linear": OnTheFlyMixtureLinear,
     }
     if task_name in task_names_to_classes:
         task_cls = task_names_to_classes[task_name]
@@ -73,7 +76,167 @@ def get_task_sampler(
         print("Unknown task")
         raise NotImplementedError
 
+class MultiContextMixtureLinear(Task):
+    def __init__(self, n_dims, batch_size, pool_dict=None, seeds=None, 
+                 n_contexts=5, n_components=3, context_length=20, 
+                 predict_length=1, scale=1.0, **kwargs):
+        super().__init__(n_dims, batch_size, pool_dict, seeds)
+        
+        self.n_contexts = n_contexts
+        self.n_components = n_components
+        self.context_length = context_length
+        self.predict_length = predict_length
+        self.output_norm_factor = math.sqrt(n_dims)
+        self.scale = scale
+        
+        self.current_components = None
+        self.context_assignments = None
+        self.target_assignment = None
 
+    def _generate_fresh_components(self, batch_size):
+        components = torch.randn(batch_size, self.n_components, self.n_dims, 1)
+        return components * self.scale
+    
+    def _assign_components(self, batch_size):
+        context_assignments = torch.randint(0, self.n_components, 
+                                          (batch_size, self.n_contexts))
+        target_assignments = torch.randint(0, self.n_components, (batch_size,))
+        
+        return context_assignments, target_assignments
+    
+    def evaluate(self, xs_b):
+        # xs_b: (batch_size, total_points, n_dims)
+        # ys_b: (batch_size, total_points)
+        
+        batch_size, total_points, n_dims = xs_b.shape
+        components = self._generate_fresh_components(batch_size)
+        context_assignments, target_assignments = self._assign_components(batch_size)
+        
+        self.current_components = components
+        self.context_assignments = context_assignments
+        self.target_assignment = target_assignments
+        
+        points_per_context = self.context_length
+        # points_per_target = self.context_length - self.predict_length
+        
+
+        total_expected_points = self.n_contexts * self.context_length + self.n_contexts + 1
+        
+        if total_points != total_expected_points:
+            raise ValueError(f"Expected {total_expected_points} points, got {total_points}")
+
+        ys_b = torch.zeros(batch_size, total_points, device=xs_b.device)
+        
+        for b in range(batch_size):
+            point_idx = 0
+            
+            for ctx_idx in range(self.n_contexts):
+                comp_idx = context_assignments[b, ctx_idx]
+                w = components[b, comp_idx].to(xs_b.device)
+                start, end = point_idx, point_idx + points_per_context
+                context_xs = xs_b[b, start:end]
+                context_ys = (context_xs @ w)[:, 0] / self.output_norm_factor
+                ys_b[b, start:end] = context_ys * self.scale
+                point_idx += points_per_context + 1 # for pecial token
+                            
+            target_comp_idx = target_assignments[b]
+            w_target = components[b, target_comp_idx].to(xs_b.device)        
+
+            # start, end = point_idx, point_idx + points_per_target
+            # target_xs = xs_b[b, start:end]
+            
+            # target_ys = (target_xs @ w_target)[:, 0] / self.output_norm_factor
+            # ys_b[b, start:end] = target_ys * self.scale
+
+            predict_idx = total_points - 1
+            x_to_predict = xs_b[b, predict_idx] 
+            y_to_predict = ((x_to_predict @ w_target).squeeze() / self.output_norm_factor) * self.scale            
+            ys_b[b, predict_idx] = y_to_predict
+                        
+        return ys_b
+    
+    def get_mixture_info(self):
+        """Return mixture component information for analysis"""
+        return {
+            'components': self.current_components,
+            'context_assignments': self.context_assignments,
+            'target_assignment': self.target_assignment,
+            'n_components': self.n_components,
+            'n_contexts': self.n_contexts
+        }
+
+    @staticmethod
+    def get_metric():
+        return squared_error
+
+    @staticmethod
+    def get_training_metric():
+        return mean_squared_error
+
+
+class OnTheFlyMixtureLinear(Task):
+    """
+    Linear-regression-style task for the grouped mixture setting.
+
+    It expects:
+      - components: (B, K, n_dims, 1) tensor of weight vectors
+      - component_assignments: (B, T) long tensor, each entry in {0..K-1}
+    For each position t, y[b,t] = x[b,t]^T w_{components[b, component_assignments[b,t]]}.
+    """
+
+    def __init__(
+        self,
+        n_dims,
+        batch_size,
+        pool_dict=None,
+        seeds=None,
+        components=None,
+        component_assignments=None,
+        scale=1.0,
+        noise_std=0.0,
+        **kwargs,
+    ):
+        super().__init__(n_dims, batch_size, pool_dict, seeds)
+        assert components is not None, "OnTheFlyMixtureLinear requires components"
+        assert component_assignments is not None, "OnTheFlyMixtureLinear requires component_assignments"
+
+        self.components = components
+        self.component_assignments = component_assignments.long()
+        self.scale = scale
+        self.noise_std = noise_std
+
+    def evaluate(self, xs_b):
+        """
+        xs_b: (B, T, d)
+        Returns:
+          ys_b: (B, T)
+        """
+        B, T, d = xs_b.shape
+        components = self.components.to(xs_b.device)
+        comp_ids = self.component_assignments.to(xs_b.device)
+
+        # Gather the right weight vector per point
+        batch_idx = torch.arange(B, device=xs_b.device).unsqueeze(1).expand(B, T)
+        # w_for_points: (B, T, d, 1)
+        w_for_points = components[batch_idx, comp_ids]
+
+        # Compute y = x^T w
+        ys_b = (xs_b.unsqueeze(-2) @ w_for_points).squeeze(-1).squeeze(-1)
+        ys_b = ys_b * self.scale
+
+        if self.noise_std > 0:
+            ys_b = ys_b + torch.randn_like(ys_b) * self.noise_std
+
+        return ys_b
+
+    @staticmethod
+    def get_metric():
+        return squared_error
+
+    @staticmethod
+    def get_training_metric():
+        return mean_squared_error
+    
 class LinearRegression(Task):
     def __init__(self, n_dims, batch_size, pool_dict=None, seeds=None, scale=1):
         """scale: a constant by which to scale the randomly sampled weights."""

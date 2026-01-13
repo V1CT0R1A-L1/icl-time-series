@@ -11,6 +11,158 @@ class DataSampler:
         raise NotImplementedError
 
 
+class OnTheFlyMixtureLinearSampler(DataSampler):
+    """
+    For each batch element, sample K linear components and C contexts per component,
+    plus one target point. The transformer sees a flat sequence of points; grouping
+    is implicit in the component_assignments, which are only known to the generator.
+
+    Sequence layout per example (no SEP/PRED tokens):
+      [contexts of comp 0] [contexts of comp 1] ... [contexts of comp K-1] [target]
+    Total length T = K * C + 1
+    """
+
+    def __init__(
+        self,
+        n_dims,
+        n_components=3,
+        contexts_per_component=4,
+        noise_std=0.0,
+        scale=1.0,
+        **kwargs,
+    ):
+        super().__init__(n_dims)
+        self.n_components = n_components
+        self.contexts_per_component = contexts_per_component
+        self.noise_std = noise_std
+        self.scale = scale
+
+        # Base sampler for xs (just Gaussian)
+        filtered_kwargs = {}
+        if "bias" in kwargs:
+            filtered_kwargs["bias"] = kwargs["bias"]
+        if "scale" in kwargs:
+            filtered_kwargs["scale"] = kwargs["scale"]
+        self.base_sampler = GaussianSampler(n_dims, **filtered_kwargs)
+
+        # State for the current batch (set in sample_xs)
+        self.current_components = None          # (B, K, d, 1)
+        self.component_assignments = None       # (B, T)
+        self.target_components = None           # (B,)
+        self.total_length = self.n_components * self.contexts_per_component + 1
+
+    def get_sequence_structure(self):
+        """
+        Minimal structure: we only need to know total_length and which positions
+        we will supervise (here: last position only).
+        """
+        predict_position = self.total_length - 1
+        predict_inds = [predict_position]
+        return {
+            "total_length": self.total_length,
+            "predict_inds": predict_inds,
+        }
+
+    def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None):
+        if n_points != self.total_length:
+            raise ValueError(
+                f"OnTheFlyMixtureLinearSampler expected n_points={self.total_length}, "
+                f"got {n_points}"
+            )
+
+        xs_b = self.base_sampler.sample_xs(
+            n_points, b_size, n_dims_truncated=n_dims_truncated, seeds=seeds
+        )  # (B, T, d)
+
+        B, T, d = xs_b.shape
+        K = self.n_components
+        C = self.contexts_per_component
+
+        # Sample K components per example: w ~ N(0, I) then scaled
+        components = torch.randn(B, K, d, 1, device=xs_b.device) * self.scale  # (B,K,d,1)
+
+        # For each example, assign contexts deterministically and target randomly
+        component_assignments = torch.zeros(B, T, dtype=torch.long, device=xs_b.device)
+        for b in range(B):
+            # Context blocks: 0..C-1 -> comp 0, C..2C-1 -> comp 1, ...
+            idx = 0
+            for k in range(K):
+                start = idx
+                end = idx + C
+                component_assignments[b, start:end] = k
+                idx = end
+            # Target index is last, choose a random component
+            target_comp = torch.randint(0, K, (1,), device=xs_b.device).item()
+            component_assignments[b, T - 1] = target_comp
+
+        self.current_components = components
+        self.component_assignments = component_assignments
+        self.target_components = component_assignments[:, -1]
+
+        return xs_b
+
+class MultiContextMixtureSampler(DataSampler):
+    def __init__(self, n_dims, n_contexts=5, n_components=3, 
+                 context_length=20, predict_length=1, **kwargs):
+        super().__init__(n_dims)
+        self.n_contexts = n_contexts
+        self.n_components = n_components
+        self.context_length = context_length
+        self.predict_length = predict_length
+
+        filtered_kwargs = {}
+        if 'bias' in kwargs:
+            filtered_kwargs['bias'] = kwargs['bias']
+        if 'scale' in kwargs:
+            filtered_kwargs['scale'] = kwargs['scale']
+        self.base_sampler = GaussianSampler(n_dims, **filtered_kwargs)
+
+    def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None):
+        '''
+        Structure: 
+        [series_1_point_1] [series_1_point_2] ... [series_1_point_k] [SEP]
+        [series_2_point_1] [series_2_point_2] ... [series_2_point_k] [SEP]
+        ...
+        [target_series_point_1] [target_series_point_2] ... [target_series_point_m] [PREDICT] // change to x1 y1 x2 y2
+        '''
+        structure = self.get_sequence_structure()
+        total_length = structure['total_length']
+        
+        if n_points != total_length:
+            raise ValueError(f"Requested {n_points} points but need {total_length} for structure")
+        
+        xs_b = self.base_sampler.sample_xs(total_length, b_size, n_dims_truncated, seeds)
+        
+        for b in range(b_size):
+            for sep_pos in structure['sep_positions']:
+                if sep_pos < total_length:
+                    xs_b[b, sep_pos] = torch.zeros(self.n_dims)
+            
+        return xs_b
+    
+    def get_sequence_structure(self):
+        
+        total_length = self.n_contexts * self.context_length + self.n_contexts + 1     
+
+        sep_positions = []
+        for i in range(self.n_contexts):
+            sep_pos = (i + 1) * self.context_length + i
+            sep_positions.append(sep_pos)
+
+        predict_position = total_length - 1
+        predict_inds = [predict_position]
+
+        return {
+            'n_contexts': self.n_contexts,
+            'n_components': self.n_components,
+            'context_length': self.context_length,
+            'predict_length': self.predict_length,
+            'total_length': total_length,
+            'sep_positions': sep_positions,
+            'predict_position': predict_position,
+            'predict_inds': predict_inds
+        }
+    
 class ARWarmupSampler(DataSampler):
     """
     AR(q) time series sampler for warmup experiments.
@@ -147,6 +299,8 @@ def get_data_sampler(data_name, n_dims, **kwargs):
     names_to_classes = {
         "gaussian": GaussianSampler,
         "ar_warmup": ARWarmupSampler,
+        "multi_context_mixture": MultiContextMixtureSampler,
+        "group_mixture_linear": OnTheFlyMixtureLinearSampler,
     }
     if data_name in names_to_classes:
         sampler_cls = names_to_classes[data_name]
@@ -183,7 +337,10 @@ class GaussianSampler(DataSampler):
                 generator.manual_seed(seed)
                 xs_b[i] = torch.randn(n_points, self.n_dims, generator=generator)
         if self.scale is not None:
-            xs_b = xs_b @ self.scale
+            if isinstance(self.scale, (int, float)):
+                xs_b = xs_b * self.scale
+            else:
+                xs_b = xs_b @ self.scale
         if self.bias is not None:
             xs_b += self.bias
         if n_dims_truncated is not None:

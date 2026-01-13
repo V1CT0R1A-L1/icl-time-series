@@ -1,0 +1,30 @@
+inherit:
+  - base.yaml
+  - models/standard.yaml
+
+training:
+  task: multi_context_mixture_linear
+  data: multi_context_mixture
+  task_kwargs:
+    n_contexts: 8
+    n_components: 5
+    context_length: 25
+    predict_length: 2
+    scale: 1.0
+    # noise_std: 0.1
+  curriculum:
+    dims:
+      start: 30
+      end: 150
+      inc: 3
+      interval: 150
+    points:
+      start: 150
+      end: 800
+      inc: 25
+      interval: 150
+  batch_size: 16
+  train_steps: 1000
+  learning_rate: 0.00008
+
+out_dir: ../models/multi_context_large
