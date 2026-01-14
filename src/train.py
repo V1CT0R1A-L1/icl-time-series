@@ -194,12 +194,30 @@ def train(model, args, device):
                 print(f"ys shape: {ys.shape}")
                 print(f"Component assignments (first example): {data_sampler.component_assignments[0].cpu().tolist()}")
                 print(f"Target component (first example): {data_sampler.target_components[0].item()}")
+                
+                # Show the pattern: for each component, show its context points
+                print(f"\nComponent breakdown (first example):")
+                for k in range(data_sampler.n_components):
+                    comp_mask = (data_sampler.component_assignments[0] == k).cpu()
+                    comp_indices = torch.where(comp_mask)[0].tolist()
+                    if len(comp_indices) > 0:
+                        comp_ys = ys[0, comp_mask].cpu().numpy()
+                        print(f"  Component {k}: indices {comp_indices}, ys={comp_ys}")
+                
                 print(f"\nFirst example xs (first 3 points):")
                 print(xs[0, :3, :5].cpu().numpy())  # First 3 points, first 5 dims
                 print(f"\nFirst example ys (all points):")
                 print(ys[0, :].cpu().numpy())
                 print(f"ys stats: min={ys.min().item():.3f}, max={ys.max().item():.3f}, mean={ys.mean().item():.3f}, std={ys.std().item():.3f}")
                 print(f"Target y (index {predict_inds[0]}): {ys[0, predict_inds[0]].item():.3f}")
+                
+                # Check if target component's context points are visible
+                target_comp = data_sampler.target_components[0].item()
+                target_comp_mask = (data_sampler.component_assignments[0] == target_comp).cpu()
+                target_comp_context_ys = ys[0, target_comp_mask & (torch.arange(13) < 12)].cpu().numpy()
+                print(f"\nTarget uses component {target_comp}")
+                print(f"Context points from component {target_comp}: {target_comp_context_ys}")
+                print(f"Target should be similar to these context ys (same component)")
                 print("="*60 + "\n")
         elif args.training.task == "ar_warmup" and hasattr(data_sampler, 'current_ys'):
             task = task_sampler(**task_sampler_args)
@@ -229,6 +247,18 @@ def train(model, args, device):
                 print(f"  True targets (first 3 examples): {ys[:3, predict_inds[0]].cpu().tolist()}")
                 pred_errors = (output[:, 0] - ys[:, predict_inds[0]].to(device)).abs()
                 print(f"  Prediction errors: mean={pred_errors.mean().item():.4f}, max={pred_errors.max().item():.4f}")
+                
+                # For first example, show what the model should learn
+                if i == 0 and args.training.task == "group_mixture_linear":
+                    target_comp = data_sampler.target_components[0].item()
+                    target_comp_mask = (data_sampler.component_assignments[0] == target_comp).cpu()
+                    target_comp_context_ys = ys[0, target_comp_mask & (torch.arange(ys.shape[1]) < predict_inds[0])].cpu().numpy()
+                    print(f"\n  First example analysis:")
+                    print(f"    Target component: {target_comp}")
+                    print(f"    Context ys from same component: {target_comp_context_ys}")
+                    print(f"    Target y: {ys[0, predict_inds[0]].item():.3f}")
+                    print(f"    Model prediction: {output[0, 0].item():.3f}")
+                    print(f"    Model should learn: target y is from same component as context")
             print()
 
         point_wise_loss_func = task.get_metric()
