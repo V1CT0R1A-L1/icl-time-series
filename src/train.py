@@ -246,6 +246,13 @@ def train(model, args, device):
                 log_data["n_contexts"] = mix_info['n_contexts']
                 
             if sequence_structure is not None:
+                # #region agent log
+                import json
+                try:
+                    with open('.cursor/debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"train.py:248","message":"About to access sequence_structure keys","data":{"sequence_structure_keys":list(sequence_structure.keys()) if sequence_structure else None},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                except: pass
+                # #endregion
                 log_data["context_length"] = sequence_structure['context_length']
                 log_data["predict_length"] = sequence_structure['predict_length']
 
