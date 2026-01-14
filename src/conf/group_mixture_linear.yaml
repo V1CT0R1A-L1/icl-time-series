@@ -4,7 +4,7 @@ inherit:
 
 model:
   n_dims: 20        # input dimension
-  n_positions: 25   # ensure 2 * n_positions >= T = K * C + 1
+  n_positions: 30   # ensure 2 * n_positions >= T = K * C + 1
 
 training:
   task: group_mixture_linear
