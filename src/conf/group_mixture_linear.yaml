@@ -36,5 +36,5 @@ out_dir: ../models/group_mixture_linear
 wandb:
   name: "group_mixture_linear"
 
-test_run: True
+test_run: False
 
