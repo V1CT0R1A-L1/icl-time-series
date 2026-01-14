@@ -4,16 +4,16 @@ inherit:
 
 model:
   n_dims: 20        # input dimension
-  n_positions: 30   # ensure 2 * n_positions >= T = K * C + 1
+  n_positions: 20   # ensure 2 * n_positions >= T = 2 * 8 + 1 = 17, so 20 is enough
 
 training:
   task: group_mixture_linear
   data: group_mixture_linear
   task_kwargs:
     n_components: 2            # K (reduced from 3 to make easier)
-    contexts_per_component: 6  # C (increased from 4 to give more signal)
+    contexts_per_component: 8  # C (increased to 8 for more signal per component)
     noise_std: 0.0
-    scale: 1.0
+    scale: 0.5  # Reduced scale to make values smaller, easier to learn
   batch_size: 64
   learning_rate: 0.0005  # Increased from 0.0001 for faster learning
   save_every_steps: 1000
@@ -26,8 +26,8 @@ training:
       inc: 1
       interval: 2000
     points:
-      start: 13   # T = K * C + 1 = 2 * 6 + 1 = 13
-      end: 13
+      start: 17   # T = K * C + 1 = 2 * 8 + 1 = 17
+      end: 17
       inc: 2
       interval: 2000
 
