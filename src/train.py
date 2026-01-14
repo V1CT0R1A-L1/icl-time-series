@@ -238,6 +238,23 @@ def train(model, args, device):
             predict_inds, sequence_structure
         )
         
+        # Critical diagnostic: check if loss is being computed correctly
+        if i == 0:
+            print(f"\nLOSS DEBUG (step {i}):")
+            print(f"  output shape: {output.shape}")
+            print(f"  output sample (first 3): {output[:3, 0].cpu().tolist() if len(output.shape) > 1 else output[:3].cpu().tolist()}")
+            if predict_inds is not None and len(predict_inds) > 0:
+                print(f"  ys targets shape: {ys[:, predict_inds].shape}")
+                print(f"  ys targets (first 3): {ys[:3, predict_inds[0]].cpu().tolist()}")
+                print(f"  Loss computed on: output vs ys[:, {predict_inds}]")
+                manual_loss = ((output[:, 0] - ys[:, predict_inds[0]].to(device))**2).mean()
+                print(f"  Manual MSE loss: {manual_loss.item():.6f}")
+                print(f"  Reported loss: {loss:.6f}")
+            else:
+                print(f"  ys shape: {ys.shape}")
+                print(f"  Loss computed on: output vs ys (all positions)")
+            print()
+        
         # Diagnostic prints for predictions
         if i == 0 or (i < 10 and i % 2 == 0):
             print(f"\nStep {i}:")

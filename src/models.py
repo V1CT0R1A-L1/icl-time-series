@@ -194,6 +194,9 @@ class TransformerModel(nn.Module):
         if inds is not None and len(inds) == 0:
             return torch.zeros(xs.shape[0], 0, device=xs.device)
 
+        # Track if inds was originally None (standard autoregressive) vs explicitly provided (selective prediction)
+        inds_was_none = (inds is None)
+        
         if inds is None:
             inds = torch.arange(ys.shape[1], device=ys.device)
         else:
@@ -209,9 +212,10 @@ class TransformerModel(nn.Module):
                         return torch.zeros(xs.shape[0], 0, device=xs.device)
                     inds = torch.tensor(valid_inds, device=ys.device)
 
-        # Mask labels at prediction indices so the model does not see true y there
+        # Mask labels at prediction indices ONLY if inds was explicitly provided
+        # For standard autoregressive (inds=None), don't mask - model sees all y values
         ys_input = ys.clone()
-        if inds is not None and len(inds) > 0:
+        if not inds_was_none and len(inds) > 0:
             ys_input[:, inds] = 0.0
             # Diagnostic: verify masking worked (only print once)
             if not hasattr(self, '_masking_verified'):
@@ -222,11 +226,35 @@ class TransformerModel(nn.Module):
         zs = self._combine(xs, ys_input)
         embeds = self._read_in(zs)
         
+        # Diagnostic: show what the model sees (only once)
+        if not hasattr(self, '_sequence_verified'):
+            print(f"\nMODEL SEQUENCE DEBUG:")
+            print(f"  xs shape: {xs.shape}, ys_input shape: {ys_input.shape}")
+            print(f"  After _combine, zs shape: {zs.shape}")
+            print(f"  zs[0, :4, :3] (first 4 positions, first 3 dims): {zs[0, :4, :3].cpu().numpy()}")
+            print(f"  For point 0: zs[0, 0] should be x0, zs[0, 1] should be [y0, 0, 0, ...]")
+            if len(inds) > 0:
+                target_idx_in_ys = inds[0].item()
+                target_idx_in_zs = target_idx_in_ys * 2 + 1  # y positions are at odd indices
+                print(f"  Target is at ys index {target_idx_in_ys}, which is zs position {target_idx_in_zs}")
+                print(f"  zs[0, {target_idx_in_zs}] (target y position, should be masked): {zs[0, target_idx_in_zs, :3].cpu().numpy()}")
+            self._sequence_verified = True
+        
         if sequence_structure is not None:
             embeds = self._add_special_token_embeddings(embeds, sequence_structure)
          
         output = self._backbone(inputs_embeds=embeds).last_hidden_state
         prediction = self._read_out(output)
+        
+        # Diagnostic: verify prediction extraction
+        if not hasattr(self, '_prediction_verified'):
+            print(f"\nMODEL PREDICTION DEBUG:")
+            print(f"  output shape: {output.shape}")
+            print(f"  prediction shape (before indexing): {prediction.shape}")
+            print(f"  prediction[:, 1::2, 0] extracts y positions, shape: {prediction[:, 1::2, 0].shape}")
+            print(f"  inds: {inds}")
+            print(f"  Final output shape: {prediction[:, 1::2, 0][:, inds].shape}")
+            self._prediction_verified = True
         
         return prediction[:, 1::2, 0][:, inds]
 
