@@ -53,29 +53,16 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
 
     def get_sequence_structure(self):
         """
-        Minimal structure: we only need to know total_length and which positions
-        we will supervise (here: last position only).
+        Returns sequence structure including keys expected by train.py logging.
         """
-        # #region agent log
-        import json
-        try:
-            with open('.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"samplers.py:54","message":"get_sequence_structure called","data":{"n_components":self.n_components,"contexts_per_component":self.contexts_per_component,"total_length":self.total_length},"timestamp":int(__import__('time').time()*1000)}) + '\n')
-        except: pass
-        # #endregion
         predict_position = self.total_length - 1
         predict_inds = [predict_position]
-        result = {
+        return {
             "total_length": self.total_length,
             "predict_inds": predict_inds,
+            "context_length": self.contexts_per_component,  # C contexts per component
+            "predict_length": 1,  # We predict one target point
         }
-        # #region agent log
-        try:
-            with open('.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"samplers.py:64","message":"get_sequence_structure returning","data":{"returned_keys":list(result.keys())},"timestamp":int(__import__('time').time()*1000)}) + '\n')
-        except: pass
-        # #endregion
-        return result
 
     def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None):
         if n_points != self.total_length:
