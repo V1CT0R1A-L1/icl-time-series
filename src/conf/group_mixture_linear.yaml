@@ -4,7 +4,7 @@ inherit:
 
 model:
   n_dims: 20        # input dimension
-  n_positions: 20   # ensure 2 * n_positions >= T = 2 * 8 + 1 = 17, so 20 is enough
+  n_positions: 40   # need max_allowed_length = n_positions // 2 >= 17, so n_positions >= 34 (using 40 for safety)
 
 training:
   task: group_mixture_linear
