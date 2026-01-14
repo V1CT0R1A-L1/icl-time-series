@@ -214,7 +214,8 @@ def train(model, args, device):
                 # Check if target component's context points are visible
                 target_comp = data_sampler.target_components[0].item()
                 target_comp_mask = (data_sampler.component_assignments[0] == target_comp).cpu()
-                target_comp_context_ys = ys[0, target_comp_mask & (torch.arange(13) < 12)].cpu().numpy()
+                seq_len = ys.shape[1]
+                target_comp_context_ys = ys[0, target_comp_mask & (torch.arange(seq_len) < predict_inds[0])].cpu().numpy()
                 print(f"\nTarget uses component {target_comp}")
                 print(f"Context points from component {target_comp}: {target_comp_context_ys}")
                 print(f"Target should be similar to these context ys (same component)")
