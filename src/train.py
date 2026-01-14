@@ -184,6 +184,23 @@ def train(model, args, device):
                 **task_sampler_args,
             )
             ys = task.evaluate(xs)
+            
+            # Diagnostic prints for first batch
+            if i == 0:
+                print("\n" + "="*60)
+                print("DIAGNOSTIC: First batch data structure")
+                print("="*60)
+                print(f"xs shape: {xs.shape}")
+                print(f"ys shape: {ys.shape}")
+                print(f"Component assignments (first example): {data_sampler.component_assignments[0].cpu().tolist()}")
+                print(f"Target component (first example): {data_sampler.target_components[0].item()}")
+                print(f"\nFirst example xs (first 3 points):")
+                print(xs[0, :3, :5].cpu().numpy())  # First 3 points, first 5 dims
+                print(f"\nFirst example ys (all points):")
+                print(ys[0, :].cpu().numpy())
+                print(f"ys stats: min={ys.min().item():.3f}, max={ys.max().item():.3f}, mean={ys.mean().item():.3f}, std={ys.std().item():.3f}")
+                print(f"Target y (index {predict_inds[0]}): {ys[0, predict_inds[0]].item():.3f}")
+                print("="*60 + "\n")
         elif args.training.task == "ar_warmup" and hasattr(data_sampler, 'current_ys'):
             task = task_sampler(**task_sampler_args)
             ys = data_sampler.current_ys
@@ -201,6 +218,18 @@ def train(model, args, device):
             model, xs.to(device), ys.to(device), optimizer, loss_func, 
             predict_inds, sequence_structure
         )
+        
+        # Diagnostic prints for predictions
+        if i == 0 or (i < 10 and i % 2 == 0):
+            print(f"\nStep {i}:")
+            print(f"  Loss: {loss:.4f}")
+            if output is not None and len(output.shape) > 0:
+                print(f"  Predictions shape: {output.shape}")
+                print(f"  Predictions (first 3 examples): {output[:3, 0].cpu().tolist()}")
+                print(f"  True targets (first 3 examples): {ys[:3, predict_inds[0]].cpu().tolist()}")
+                pred_errors = (output[:, 0] - ys[:, predict_inds[0]].to(device)).abs()
+                print(f"  Prediction errors: mean={pred_errors.mean().item():.4f}, max={pred_errors.max().item():.4f}")
+            print()
 
         point_wise_loss_func = task.get_metric()
         if predict_inds is not None and len(predict_inds) > 0:

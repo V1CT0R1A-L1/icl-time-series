@@ -213,6 +213,11 @@ class TransformerModel(nn.Module):
         ys_input = ys.clone()
         if inds is not None and len(inds) > 0:
             ys_input[:, inds] = 0.0
+            # Diagnostic: verify masking worked (only print once)
+            if not hasattr(self, '_masking_verified'):
+                print(f"MODEL DEBUG: Masked {len(inds)} positions. ys_input at masked pos: {ys_input[0, inds[0]].item():.6f}")
+                print(f"MODEL DEBUG: Original ys at masked pos: {ys[0, inds[0]].item():.6f}")
+                self._masking_verified = True
 
         zs = self._combine(xs, ys_input)
         embeds = self._read_in(zs)
