@@ -469,10 +469,53 @@ def load_config(config_path):
         config = yaml.safe_load(f)
     
     # Handle inheritance
+    # Inherit paths are relative to src/conf/, not the config file's directory
     if 'inherit' in config:
         base_config = {}
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+        
+        # Find src/conf base directory
+        # Walk up from config file until we find 'conf' directory
+        conf_base = config_dir
+        while os.path.basename(conf_base) != 'conf' and conf_base != os.path.dirname(conf_base):
+            conf_base = os.path.dirname(conf_base)
+        
+        # If we didn't find 'conf', try src/conf relative to workspace root
+        if os.path.basename(conf_base) != 'conf':
+            # Try to find src/conf from current working directory
+            cwd = os.getcwd()
+            if 'src' in cwd:
+                # Extract path up to src
+                parts = cwd.split(os.sep)
+                src_idx = next((i for i, part in enumerate(parts) if part == 'src'), None)
+                if src_idx is not None:
+                    conf_base = os.sep.join(parts[:src_idx + 1] + ['conf'])
+                else:
+                    conf_base = os.path.join(cwd, 'src', 'conf')
+            else:
+                # Fallback: assume src/conf is relative to current directory
+                conf_base = os.path.join(cwd, 'src', 'conf')
+        
         for inherit_file in config['inherit']:
-            inherit_path = os.path.join(os.path.dirname(config_path), inherit_file)
+            # Try relative to conf_base first (src/conf/)
+            inherit_path = os.path.join(conf_base, inherit_file)
+            if not os.path.exists(inherit_path):
+                # Fallback: try relative to config file directory
+                inherit_path = os.path.join(config_dir, inherit_file)
+            
+            if not os.path.exists(inherit_path):
+                # Last resort: try relative to current working directory
+                cwd_conf = os.path.join(os.getcwd(), 'src', 'conf', inherit_file)
+                if os.path.exists(cwd_conf):
+                    inherit_path = cwd_conf
+                else:
+                    raise FileNotFoundError(
+                        f"Could not find inherit file '{inherit_file}'. "
+                        f"Tried: {os.path.join(conf_base, inherit_file)}, "
+                        f"{os.path.join(config_dir, inherit_file)}, and "
+                        f"{cwd_conf}"
+                    )
+            
             with open(inherit_path, 'r') as f:
                 inherited = yaml.safe_load(f)
                 base_config = deep_merge(base_config, inherited)
