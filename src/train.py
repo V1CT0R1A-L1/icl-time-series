@@ -32,7 +32,66 @@ def train_step(model, xs, ys, optimizer, loss_func, predict_inds=None, sequence_
             output = model(xs, ys, inds=predict_inds)
         loss = loss_func(output, ys[:, predict_inds])
     
+    # #region agent log
+    import json
+    import os
+    try:
+        os.makedirs('.cursor', exist_ok=True)
+        log_path = os.path.join('.cursor', 'debug.log')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            log_entry = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "C",
+                "location": "train.py:33",
+                "message": "Loss computation values",
+                "data": {
+                    "output_shape": list(output.shape),
+                    "output_sample": output[0, :3].cpu().tolist() if output.shape[1] >= 3 else output[0].cpu().tolist(),
+                    "target_shape": list(ys[:, predict_inds].shape) if predict_inds is not None else list(ys.shape),
+                    "target_sample": ys[0, predict_inds[:3]].cpu().tolist() if predict_inds is not None and len(predict_inds) >= 3 else (ys[0, :3].cpu().tolist() if predict_inds is None else ys[0, predict_inds].cpu().tolist()),
+                    "loss_value": loss.item()
+                },
+                "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+            }
+            f.write(json.dumps(log_entry) + '\n')
+    except: pass
+    # #endregion
+    
     loss.backward()
+    
+    # #region agent log
+    import os
+    try:
+        log_path = os.path.join('.cursor', 'debug.log')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            grad_norms = {}
+            total_norm = 0.0
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    param_norm = param.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+                    grad_norms[name] = param_norm.item()
+            total_norm = total_norm ** (1. / 2)
+            
+            log_entry = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "D",
+                "location": "train.py:35",
+                "message": "Gradient norms after backward",
+                "data": {
+                    "total_grad_norm": total_norm,
+                    "grad_norms_sample": dict(list(grad_norms.items())[:5]),
+                    "num_params_with_grad": len([p for p in model.parameters() if p.grad is not None]),
+                    "num_params_total": len(list(model.parameters()))
+                },
+                "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+            }
+            f.write(json.dumps(log_entry) + '\n')
+    except: pass
+    # #endregion
+    
     optimizer.step()
     return loss.detach().item(), output.detach()
 
@@ -188,37 +247,51 @@ def train(model, args, device):
             # Diagnostic prints for first batch
             if i == 0:
                 print("\n" + "="*60)
-                print("DIAGNOSTIC: First batch data structure")
+                print("DIAGNOSTIC: First batch data structure (Redesigned ICL)")
                 print("="*60)
                 print(f"xs shape: {xs.shape}")
                 print(f"ys shape: {ys.shape}")
+                K = data_sampler.n_components
+                C = data_sampler.contexts_per_component
+                T_target = data_sampler.target_cluster_context_points
+                total_context = K * C
+                target_start = total_context
+                target_context_end = target_start + T_target
+                predict_idx = predict_inds[0] if predict_inds is not None and len(predict_inds) > 0 else -1
+                
+                print(f"\nStructure: {K} context clusters × {C} points + target cluster ({T_target} context + 1 prediction)")
                 print(f"Component assignments (first example): {data_sampler.component_assignments[0].cpu().tolist()}")
+                if hasattr(data_sampler, 'cluster_assignments'):
+                    print(f"Cluster assignments (which component each cluster uses): {data_sampler.cluster_assignments[0].cpu().tolist()}")
                 print(f"Target component (first example): {data_sampler.target_components[0].item()}")
                 
-                # Show the pattern: for each component, show its context points
-                print(f"\nComponent breakdown (first example):")
-                for k in range(data_sampler.n_components):
-                    comp_mask = (data_sampler.component_assignments[0] == k).cpu()
-                    comp_indices = torch.where(comp_mask)[0].tolist()
-                    if len(comp_indices) > 0:
-                        comp_ys = ys[0, comp_mask].cpu().numpy()
-                        print(f"  Component {k}: indices {comp_indices}, ys={comp_ys}")
+                # Show context clusters
+                print(f"\nContext clusters (first example):")
+                for cluster_idx in range(K):
+                    cluster_start = cluster_idx * C
+                    cluster_end = cluster_start + C
+                    cluster_comp = data_sampler.component_assignments[0, cluster_start].item()
+                    cluster_ys = ys[0, cluster_start:cluster_end].cpu().numpy()
+                    print(f"  Cluster {cluster_idx}: uses component {cluster_comp}, indices [{cluster_start}:{cluster_end}], ys={cluster_ys}")
+                
+                # Show target cluster
+                print(f"\nTarget cluster (first example):")
+                target_comp = data_sampler.target_components[0].item()
+                target_context_ys = ys[0, target_start:target_context_end].cpu().numpy()
+                target_pred_y = ys[0, predict_idx].item()
+                print(f"  Uses component {target_comp}")
+                print(f"  Context points (indices [{target_start}:{target_context_end}]): ys={target_context_ys}")
+                print(f"  Prediction point (index {predict_idx}): y={target_pred_y:.3f}")
                 
                 print(f"\nFirst example xs (first 3 points):")
                 print(xs[0, :3, :5].cpu().numpy())  # First 3 points, first 5 dims
                 print(f"\nFirst example ys (all points):")
                 print(ys[0, :].cpu().numpy())
                 print(f"ys stats: min={ys.min().item():.3f}, max={ys.max().item():.3f}, mean={ys.mean().item():.3f}, std={ys.std().item():.3f}")
-                print(f"Target y (index {predict_inds[0]}): {ys[0, predict_inds[0]].item():.3f}")
-                
-                # Check if target component's context points are visible
-                target_comp = data_sampler.target_components[0].item()
-                target_comp_mask = (data_sampler.component_assignments[0] == target_comp).cpu()
-                seq_len = ys.shape[1]
-                target_comp_context_ys = ys[0, target_comp_mask & (torch.arange(seq_len) < predict_inds[0])].cpu().numpy()
-                print(f"\nTarget uses component {target_comp}")
-                print(f"Context points from component {target_comp}: {target_comp_context_ys}")
-                print(f"Target should be similar to these context ys (same component)")
+                print(f"\nModel should:")
+                print(f"  1. Learn components from context clusters")
+                print(f"  2. Infer component {target_comp} from target cluster's context points")
+                print(f"  3. Predict target point using component {target_comp}")
                 print("="*60 + "\n")
         elif args.training.task == "ar_warmup" and hasattr(data_sampler, 'current_ys'):
             task = task_sampler(**task_sampler_args)
@@ -269,14 +342,18 @@ def train(model, args, device):
                 # For first example, show what the model should learn
                 if i == 0 and args.training.task == "group_mixture_linear":
                     target_comp = data_sampler.target_components[0].item()
-                    target_comp_mask = (data_sampler.component_assignments[0] == target_comp).cpu()
-                    target_comp_context_ys = ys[0, target_comp_mask & (torch.arange(ys.shape[1]) < predict_inds[0])].cpu().numpy()
+                    T_target = data_sampler.target_cluster_context_points
+                    K = data_sampler.n_components
+                    C = data_sampler.contexts_per_component
+                    target_start = K * C
+                    target_context_end = target_start + T_target
+                    target_context_ys = ys[0, target_start:target_context_end].cpu().numpy()
                     print(f"\n  First example analysis:")
                     print(f"    Target component: {target_comp}")
-                    print(f"    Context ys from same component: {target_comp_context_ys}")
-                    print(f"    Target y: {ys[0, predict_inds[0]].item():.3f}")
+                    print(f"    Target cluster context ys (for inference): {target_context_ys}")
+                    print(f"    Target y (to predict): {ys[0, predict_inds[0]].item():.3f}")
                     print(f"    Model prediction: {output[0, 0].item():.3f}")
-                    print(f"    Model should learn: target y is from same component as context")
+                    print(f"    Model should: infer component {target_comp} from target context, then predict")
             print()
 
         point_wise_loss_func = task.get_metric()

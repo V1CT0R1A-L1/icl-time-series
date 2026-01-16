@@ -13,13 +13,21 @@ class DataSampler:
 
 class OnTheFlyMixtureLinearSampler(DataSampler):
     """
-    For each batch element, sample K linear components and C contexts per component,
-    plus one target point. The transformer sees a flat sequence of points; grouping
-    is implicit in the component_assignments, which are only known to the generator.
-
-    Sequence layout per example (no SEP/PRED tokens):
-      [contexts of comp 0] [contexts of comp 1] ... [contexts of comp K-1] [target]
-    Total length T = K * C + 1
+    Redesigned for proper in-context learning:
+    
+    Sequence layout per example:
+      [Cluster 0: C points from random component] 
+      [Cluster 1: C points from random component] 
+      ...
+      [Cluster K-1: C points from random component]
+      [Target Cluster: T points with y-values + 1 point to predict]
+    
+    The model must:
+    1. Learn weight vectors w_0, w_1, ..., w_{K-1} from context clusters
+    2. Infer which component is used in the target cluster from first T points
+    3. Predict the last target point using that component
+    
+    Total length = (K × C) + (T + 1)
     """
 
     def __init__(
@@ -27,6 +35,7 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         n_dims,
         n_components=3,
         contexts_per_component=4,
+        target_cluster_context_points=2,  # T: number of points with y-values in target cluster
         noise_std=0.0,
         scale=1.0,
         **kwargs,
@@ -34,6 +43,7 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         super().__init__(n_dims)
         self.n_components = n_components
         self.contexts_per_component = contexts_per_component
+        self.target_cluster_context_points = target_cluster_context_points  # T
         self.noise_std = noise_std
         self.scale = scale
 
@@ -48,8 +58,10 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         # State for the current batch (set in sample_xs)
         self.current_components = None          # (B, K, d, 1)
         self.component_assignments = None       # (B, T)
-        self.target_components = None           # (B,)
-        self.total_length = self.n_components * self.contexts_per_component + 1
+        self.target_components = None           # (B,) - component used for target cluster
+        self.cluster_assignments = None          # (B, K) - which component each cluster uses
+        # Total = K context clusters × C points + target cluster (T context + 1 prediction)
+        self.total_length = (self.n_components * self.contexts_per_component) + (self.target_cluster_context_points + 1)
 
     def get_sequence_structure(self):
         """
@@ -78,27 +90,39 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         B, T, d = xs_b.shape
         K = self.n_components
         C = self.contexts_per_component
+        T_target = self.target_cluster_context_points  # T: points with y-values in target cluster
 
         # Sample K components per example: w ~ N(0, I) then scaled
         components = torch.randn(B, K, d, 1, device=xs_b.device) * self.scale  # (B,K,d,1)
 
-        # For each example, assign contexts deterministically and target randomly
+        # For each example, randomly assign components to clusters
         component_assignments = torch.zeros(B, T, dtype=torch.long, device=xs_b.device)
+        cluster_assignments = torch.zeros(B, K, dtype=torch.long, device=xs_b.device)
+        
         for b in range(B):
-            # Context blocks: 0..C-1 -> comp 0, C..2C-1 -> comp 1, ...
+            # Randomly assign a component to each context cluster (can repeat)
+            cluster_assignments[b] = torch.randint(0, K, (K,), device=xs_b.device)
+            
+            # Fill context clusters: each cluster gets C points from its assigned component
             idx = 0
             for k in range(K):
+                cluster_comp = cluster_assignments[b, k].item()
                 start = idx
                 end = idx + C
-                component_assignments[b, start:end] = k
+                component_assignments[b, start:end] = cluster_comp
                 idx = end
-            # Target index is last, choose a random component
+            
+            # Target cluster: randomly select a component, use it for T context points + 1 prediction point
             target_comp = torch.randint(0, K, (1,), device=xs_b.device).item()
-            component_assignments[b, T - 1] = target_comp
+            target_start = K * C  # Start of target cluster
+            target_context_end = target_start + T_target
+            component_assignments[b, target_start:target_context_end] = target_comp
+            component_assignments[b, T - 1] = target_comp  # Prediction point also uses same component
 
         self.current_components = components
         self.component_assignments = component_assignments
-        self.target_components = component_assignments[:, -1]
+        self.cluster_assignments = cluster_assignments
+        self.target_components = component_assignments[:, -1]  # Component for prediction point
 
         return xs_b
 

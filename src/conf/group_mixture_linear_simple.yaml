@@ -4,7 +4,7 @@ inherit:
 
 model:
   n_dims: 20
-  n_positions: 20   # For 9 points: 2 * 4 + 1 = 9, need n_positions >= 18
+  n_positions: 20   # T = (1 * 4) + (3 + 1) = 8, need n_positions >= 16
 
 training:
   task: group_mixture_linear
@@ -12,6 +12,7 @@ training:
   task_kwargs:
     n_components: 1            # Just 1 component = pure linear regression (no clustering needed)
     contexts_per_component: 4  # 4 context points
+    target_cluster_context_points: 3  # T (points with y-values in target cluster)
     noise_std: 0.0
     scale: 0.5
   batch_size: 64
@@ -26,8 +27,8 @@ training:
       inc: 1
       interval: 2000
     points:
-      start: 5   # T = 1 * 4 + 1 = 5
-      end: 5
+      start: 8   # T = (K * C) + (T_target + 1) = (1 * 4) + (3 + 1) = 8
+      end: 8
       inc: 2
       interval: 2000
 

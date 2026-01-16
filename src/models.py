@@ -226,6 +226,35 @@ class TransformerModel(nn.Module):
         zs = self._combine(xs, ys_input)
         embeds = self._read_in(zs)
         
+        # #region agent log
+        import json
+        import os
+        try:
+            os.makedirs('.cursor', exist_ok=True)
+            log_path = os.path.join('.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                target_idx_in_ys = inds[0].item() if len(inds) > 0 else -1
+                target_idx_in_zs = target_idx_in_ys * 2 + 1 if target_idx_in_ys >= 0 else -1
+                context_y_idx = 1  # First y position (y0)
+                log_entry = {
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "E",
+                    "location": "models.py:226",
+                    "message": "Input sequence values",
+                    "data": {
+                        "ys_input_shape": list(ys_input.shape),
+                        "ys_input_context": ys_input[0, :target_idx_in_ys].cpu().tolist() if target_idx_in_ys > 0 else [],
+                        "ys_input_target": ys_input[0, target_idx_in_ys].item() if target_idx_in_ys >= 0 else 0.0,
+                        "zs_target_pos": zs[0, target_idx_in_zs, :5].cpu().tolist() if target_idx_in_zs >= 0 and target_idx_in_zs < zs.shape[1] else [],
+                        "zs_context_y_pos": zs[0, context_y_idx, :5].cpu().tolist() if zs.shape[1] > context_y_idx else []
+                    },
+                    "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+                }
+                f.write(json.dumps(log_entry) + '\n')
+        except: pass
+        # #endregion
+        
         # Diagnostic: show what the model sees (only once)
         if not hasattr(self, '_sequence_verified'):
             print(f"\nMODEL SEQUENCE DEBUG:")
@@ -255,6 +284,59 @@ class TransformerModel(nn.Module):
             print(f"  inds: {inds}")
             print(f"  Final output shape: {prediction[:, 1::2, 0][:, inds].shape}")
             self._prediction_verified = True
+        
+        # #region agent log
+        import json
+        import os
+        try:
+            os.makedirs('.cursor', exist_ok=True)
+            log_path = os.path.join('.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                y_positions = prediction[:, 1::2, 0]
+                final_output = y_positions[:, inds]
+                log_entry = {
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "B",
+                    "location": "models.py:259",
+                    "message": "Prediction extraction values",
+                    "data": {
+                        "prediction_shape": list(prediction.shape),
+                        "y_positions_shape": list(y_positions.shape),
+                        "inds": inds.cpu().tolist() if hasattr(inds, 'cpu') else inds,
+                        "final_output_shape": list(final_output.shape),
+                        "final_output_sample": final_output[0, :3].cpu().tolist() if final_output.shape[1] >= 3 else final_output[0].cpu().tolist(),
+                        "y_positions_sample": y_positions[0, :5].cpu().tolist()
+                    },
+                    "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+                }
+                f.write(json.dumps(log_entry) + '\n')
+        except: pass
+        # #endregion
+        
+        # #region agent log
+        import os
+        try:
+            os.makedirs('.cursor', exist_ok=True)
+            log_path = os.path.join('.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                log_entry = {
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "A",
+                    "location": "models.py:259",
+                    "message": "Embedding values at target position",
+                    "data": {
+                        "embeds_shape": list(embeds.shape),
+                        "target_zs_idx": (inds[0].item() * 2 + 1) if len(inds) > 0 else -1,
+                        "embeds_at_target_sample": embeds[0, (inds[0].item() * 2 + 1) if len(inds) > 0 else 0, :5].cpu().tolist(),
+                        "embeds_context_sample": embeds[0, 1, :5].cpu().tolist() if embeds.shape[1] > 1 else []
+                    },
+                    "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+                }
+                f.write(json.dumps(log_entry) + '\n')
+        except: pass
+        # #endregion
         
         return prediction[:, 1::2, 0][:, inds]
 
