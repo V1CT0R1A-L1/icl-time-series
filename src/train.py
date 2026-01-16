@@ -280,9 +280,10 @@ def train(model, args, device):
                     print(f"    Weight vector (first 5 dims): {cluster_w}")
                     print(f"    xs (first 5 dims): {cluster_xs}")
                     print(f"    ys: {cluster_ys}")
-                    # Verify: y should be approximately x^T w
-                    manual_ys = (xs[0, cluster_start:cluster_end] @ components[cluster_comp]).squeeze().cpu().numpy()
-                    print(f"    Manual y = x^T w: {manual_ys}")
+                    # Verify: y should be approximately x^T w * scale
+                    # Note: components are already scaled, and task.evaluate() applies scale again
+                    manual_ys = (xs[0, cluster_start:cluster_end] @ components[cluster_comp]).squeeze().cpu().numpy() * task.scale
+                    print(f"    Manual y = (x^T w) * scale: {manual_ys}")
                     print(f"    Difference: {np.abs(cluster_ys - manual_ys)}")
                 
                 # Show target cluster
@@ -299,8 +300,8 @@ def train(model, args, device):
                 print(f"  Context ys: {target_context_ys}")
                 print(f"  Prediction x (first 5 dims): {target_pred_x}")
                 print(f"  Prediction y (to predict): {target_pred_y:.3f}")
-                manual_pred = (xs[0, predict_idx:predict_idx+1] @ components[target_comp]).squeeze().item()
-                print(f"  Manual prediction = x^T w: {manual_pred:.3f}")
+                manual_pred = (xs[0, predict_idx:predict_idx+1] @ components[target_comp]).squeeze().item() * task.scale
+                print(f"  Manual prediction = (x^T w) * scale: {manual_pred:.3f}")
                 
                 print(f"\nFirst example xs (first 3 points):")
                 print(xs[0, :3, :5].cpu().numpy())  # First 3 points, first 5 dims
