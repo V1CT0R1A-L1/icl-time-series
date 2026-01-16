@@ -12,7 +12,7 @@ training:
   task_kwargs:
     n_components: 2            # K (number of components)
     contexts_per_component: 8  # C (points per context cluster)
-    target_cluster_context_points: 3  # T (points with y-values in target cluster for inference)
+    target_cluster_context_points: 5  # T (points with y-values in target cluster for inference)
     noise_std: 0.0
     scale: 0.5  # Reduced scale to make values smaller, easier to learn
   batch_size: 64

@@ -4,17 +4,17 @@ inherit:
 
 model:
   n_dims: 20
-  n_positions: 20   # T = (1 * 4) + (3 + 1) = 8, need n_positions >= 16
+  n_positions: 50   # T = (1 * 4) + (3 + 1) = 8, need n_positions >= 16
 
 training:
   task: group_mixture_linear
   data: group_mixture_linear
   task_kwargs:
-    n_components: 1            # Just 1 component = pure linear regression (no clustering needed)
-    contexts_per_component: 4  # 4 context points
+    n_components: 2
+    contexts_per_component: 5  # 4 context points
     target_cluster_context_points: 3  # T (points with y-values in target cluster)
     noise_std: 0.0
-    scale: 0.5
+    scale: 1.0
   batch_size: 64
   learning_rate: 0.0001
   save_every_steps: 1000
@@ -22,13 +22,13 @@ training:
   train_steps: 5001
   curriculum:
     dims:
-      start: 20
-      end: 20
+      start: 50
+      end: 50
       inc: 1
       interval: 2000
     points:
-      start: 8   # T = (K * C) + (T_target + 1) = (1 * 4) + (3 + 1) = 8
-      end: 8
+      start: 14   # T = (K * C) + (T_target + 1) = (1 * 4) + (3 + 1) = 8
+      end: 14
       inc: 2
       interval: 2000
 
