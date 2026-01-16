@@ -1,0 +1,45 @@
+# Template for Phase 1: Component Count Scaling
+# This will be used to generate configs for K = [2, 3, 4, 5, 6, 8, 10]
+# Total contexts = 24 (constant), so contexts_per_component = 24 / K
+
+inherit:
+  - models/standard.yaml
+  - wandb.yaml
+
+model:
+  n_dims: 5  # Start with low dims for easier learning
+  n_positions: 60  # T = 24 + 3 + 1 = 28, need n_positions >= 56
+
+training:
+  task: group_mixture_linear
+  data: group_mixture_linear
+  task_kwargs:
+    n_components: 2  # K - will be varied: [2, 3, 4, 5, 6, 8, 10]
+    contexts_per_component: 12  # C = 24 / K (will be: 12, 8, 6, 4.8→5, 4, 3, 2.4→2)
+    target_cluster_context_points: 3  # Constant across all experiments
+    noise_std: 0.0
+    scale: 0.1  # Small scale for easier learning
+  batch_size: 64
+  learning_rate: 0.0005
+  save_every_steps: 500  # More frequent saves for analysis
+  keep_every_steps: 100000
+  train_steps: 5001  # Longer training to see convergence
+  curriculum:
+    dims:
+      start: 5
+      end: 5
+      inc: 1
+      interval: 2000
+    points:
+      start: 28   # T = (K * C) + (T_target + 1) = 24 + 3 + 1 = 28 (constant)
+      end: 28
+      inc: 2
+      interval: 2000
+
+out_dir: ../models/phase1_component_scaling
+
+wandb:
+  name: "phase1_k{K}"  # Will be replaced with actual K value
+  tags: ["phase1", "component_scaling"]
+
+test_run: False
