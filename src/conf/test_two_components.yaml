@@ -1,0 +1,40 @@
+inherit:
+  - models/standard.yaml
+  - wandb.yaml
+
+model:
+  n_dims: 5  # Start with same low dims as 1-component test
+  n_positions: 40  # T = (2 * 8) + (3 + 1) = 20, need n_positions >= 40
+
+training:
+  task: group_mixture_linear
+  data: group_mixture_linear
+  task_kwargs:
+    n_components: 2  # Two components
+    contexts_per_component: 8  # More context per component to help learning
+    target_cluster_context_points: 3  # Same as 1-component test
+    noise_std: 0.0
+    scale: 0.1  # Same small scale as 1-component test
+  batch_size: 64
+  learning_rate: 0.0005  # Same learning rate as 1-component test
+  save_every_steps: 1000
+  keep_every_steps: 100000
+  train_steps: 2001  # Start with shorter training
+  curriculum:
+    dims:
+      start: 5
+      end: 5
+      inc: 1
+      interval: 2000
+    points:
+      start: 20   # T = (K * C) + (T_target + 1) = (2 * 8) + (3 + 1) = 20
+      end: 20
+      inc: 2
+      interval: 2000
+
+out_dir: ../models/test_two_components
+
+wandb:
+  name: "test_two_components"
+
+test_run: False
