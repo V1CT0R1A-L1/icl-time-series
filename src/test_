@@ -67,3 +67,12 @@ This creates a proper in-context learning challenge where the model must:
 1. Learn multiple patterns from context
 2. Infer which pattern applies to new data
 3. Make predictions based on that inference
+
+python src/train.py --config src/conf/phase1/k1.yaml && \
+  python src/train.py --config src/conf/phase1/k2.yaml && \
+  python src/train.py --config src/conf/phase1/k3.yaml && \
+  python src/train.py --config src/conf/phase1/k4.yaml && \
+  python src/train.py --config src/conf/phase1/k5.yaml && \
+  python src/train.py --config src/conf/phase1/k6.yaml && \
+  python src/train.py --config src/conf/phase1/k8.yaml && \
+  python src/train.py --config src/conf/phase1/k10.yaml && \
