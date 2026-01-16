@@ -1,41 +1,52 @@
+# test_data_independence.py
 import torch
 import sys
 sys.path.append('src')
 
-def emergency_check():
-    print("=== 紧急诊断 ===")
+def test_component_independence():
+    """测试不同批次是否使用独立的组件权重"""
     
-    # 1. 测试scale的影响
-    d = 20
-    scale = 1.0  # 你的配置
+    from samplers import OnTheFlyMixtureLinearSampler
     
-    # 模拟组件权重
-    w = torch.randn(d, 1) * scale
-    print(f"组件权重w (scale={scale}):")
-    print(f"  范数: {torch.norm(w):.4f}")
-    print(f"  范围: [{w.min():.4f}, {w.max():.4f}]")
+    sampler = OnTheFlyMixtureLinearSampler(
+        n_dims=5,
+        n_components=10,
+        contexts_per_component=2,
+        target_cluster_context_points=3,
+        scale=0.1
+    )
     
-    # 模拟x值
-    x = torch.randn(1, d)
-    print(f"\nx值:")
-    print(f"  范数: {torch.norm(x):.4f}")
-    print(f"  范围: [{x.min():.4f}, {x.max():.4f}]")
+    # 生成两个不同的批次
+    xs1 = sampler.sample_xs(24, batch_size=2)
+    comp1 = sampler.current_components.clone()
     
-    # 计算y = x·w
-    y = (x @ w).item()
-    print(f"\ny = x·w = {y:.4f}")
-    print(f"|y| 可能很大因为 |x|≈{torch.norm(x):.2f}, |w|≈{torch.norm(w):.2f}")
+    xs2 = sampler.sample_xs(24, batch_size=2) 
+    comp2 = sampler.current_components.clone()
     
-    # 2. 计算期望的y范围
-    # 对于标准正态x和w: E[|x|] ≈ sqrt(d), E[|w|] ≈ scale*sqrt(d)
-    expected_y_std = scale * d  # 近似
-    print(f"\n期望的y标准差: ~{expected_y_std:.2f}")
+    print("=== 组件独立性测试 ===")
+    print(f"批次1组件形状: {comp1.shape}")
+    print(f"批次2组件形状: {comp2.shape}")
     
-    # 3. 建议的scale
-    recommended_scale = 1.0 / (d ** 0.5)  # 约0.22
-    print(f"建议scale: {recommended_scale:.3f} (1/sqrt(d))")
+    # 检查批次0和批次1是否相同
+    batch_same = torch.allclose(comp1[0], comp1[1])
+    print(f"批次内组件相同?: {batch_same}")
     
-    return recommended_scale
+    # 检查不同批次是否相同
+    across_same = torch.allclose(comp1[0], comp2[0])
+    print(f"跨批次组件相同?: {across_same}")
+    
+    # 检查目标权重是否来自现有组件
+    target_comp_idx = sampler.target_components[0].item()
+    print(f"\n批次0的目标使用组件: {target_comp_idx}")
+    print(f"上下文簇中组件{target_comp_idx}的权重: {comp1[0, target_comp_idx, :3, 0]}")
+    
+    # 如果目标组件权重与上下文簇的完全一致，就有问题！
+    
+    return not (batch_same or across_same)
 
 if __name__ == "__main__":
-    emergency_check()
+    independent = test_component_independence()
+    if independent:
+        print("\n✓ 组件是独立的")
+    else:
+        print("\n✗ 问题: 组件可能共享了！")
