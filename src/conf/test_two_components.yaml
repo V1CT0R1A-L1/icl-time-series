@@ -3,7 +3,7 @@ inherit:
   - wandb.yaml
 
 model:
-  n_dims: 5  # Start with same low dims as 1-component test
+  n_dims: 5
   n_positions: 40  # T = (2 * 8) + (3 + 1) = 20, need n_positions >= 40
 
 training:
