@@ -17,8 +17,9 @@ training:
     scale: 0.1 
   batch_size: 64
   learning_rate: 0.0005
+  save_every_steps: 1000
+  keep_every_steps: 100000
   train_steps: 2001
-  
   curriculum:
     dims:
       start: 5
@@ -32,4 +33,8 @@ training:
       interval: 2000
 
 out_dir: ../models/test_fixed
+
+wandb:
+  name: "test_single_component"
+
 test_run: False
