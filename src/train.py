@@ -6,6 +6,7 @@ import uuid
 from tqdm import tqdm
 import torch
 import yaml
+import numpy as np
 
 from eval import get_run_metrics
 from tasks import get_task_sampler
@@ -265,23 +266,41 @@ def train(model, args, device):
                     print(f"Cluster assignments (which component each cluster uses): {data_sampler.cluster_assignments[0].cpu().tolist()}")
                 print(f"Target component (first example): {data_sampler.target_components[0].item()}")
                 
-                # Show context clusters
+                # Show context clusters with component weights
                 print(f"\nContext clusters (first example):")
+                components = data_sampler.current_components[0]  # (K, d, 1)
                 for cluster_idx in range(K):
                     cluster_start = cluster_idx * C
                     cluster_end = cluster_start + C
                     cluster_comp = data_sampler.component_assignments[0, cluster_start].item()
                     cluster_ys = ys[0, cluster_start:cluster_end].cpu().numpy()
-                    print(f"  Cluster {cluster_idx}: uses component {cluster_comp}, indices [{cluster_start}:{cluster_end}], ys={cluster_ys}")
+                    cluster_xs = xs[0, cluster_start:cluster_end, :5].cpu().numpy()  # First 5 dims
+                    cluster_w = components[cluster_comp, :5, 0].cpu().numpy()  # First 5 dims of weight
+                    print(f"  Cluster {cluster_idx}: uses component {cluster_comp}")
+                    print(f"    Weight vector (first 5 dims): {cluster_w}")
+                    print(f"    xs (first 5 dims): {cluster_xs}")
+                    print(f"    ys: {cluster_ys}")
+                    # Verify: y should be approximately x^T w
+                    manual_ys = (xs[0, cluster_start:cluster_end] @ components[cluster_comp]).squeeze().cpu().numpy()
+                    print(f"    Manual y = x^T w: {manual_ys}")
+                    print(f"    Difference: {np.abs(cluster_ys - manual_ys)}")
                 
                 # Show target cluster
                 print(f"\nTarget cluster (first example):")
                 target_comp = data_sampler.target_components[0].item()
                 target_context_ys = ys[0, target_start:target_context_end].cpu().numpy()
                 target_pred_y = ys[0, predict_idx].item()
+                target_context_xs = xs[0, target_start:target_context_end, :5].cpu().numpy()
+                target_w = components[target_comp, :5, 0].cpu().numpy()
+                target_pred_x = xs[0, predict_idx, :5].cpu().numpy()
                 print(f"  Uses component {target_comp}")
-                print(f"  Context points (indices [{target_start}:{target_context_end}]): ys={target_context_ys}")
-                print(f"  Prediction point (index {predict_idx}): y={target_pred_y:.3f}")
+                print(f"  Weight vector (first 5 dims): {target_w}")
+                print(f"  Context xs (first 5 dims): {target_context_xs}")
+                print(f"  Context ys: {target_context_ys}")
+                print(f"  Prediction x (first 5 dims): {target_pred_x}")
+                print(f"  Prediction y (to predict): {target_pred_y:.3f}")
+                manual_pred = (xs[0, predict_idx:predict_idx+1] @ components[target_comp]).squeeze().item()
+                print(f"  Manual prediction = x^T w: {manual_pred:.3f}")
                 
                 print(f"\nFirst example xs (first 3 points):")
                 print(xs[0, :3, :5].cpu().numpy())  # First 3 points, first 5 dims

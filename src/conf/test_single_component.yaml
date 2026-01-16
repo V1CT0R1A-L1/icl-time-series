@@ -1,0 +1,40 @@
+inherit:
+  - models/standard.yaml
+  - wandb.yaml
+
+model:
+  n_dims: 5
+  n_positions: 20
+
+training:
+  task: group_mixture_linear
+  data: group_mixture_linear
+  task_kwargs:
+    n_components: 1  # Just 1 component = pure linear regression
+    contexts_per_component: 10  # More context points
+    target_cluster_context_points: 3
+    noise_std: 0.0
+    scale: 0.1  # Much smaller scale to make learning easier
+  batch_size: 64
+  learning_rate: 0.0005  # Higher learning rate
+  save_every_steps: 1000
+  keep_every_steps: 100000
+  train_steps: 2001  # Shorter for testing
+  curriculum:
+    dims:
+      start: 5
+      end: 5
+      inc: 1
+      interval: 2000
+    points:
+      start: 14   # T = (1 * 10) + (3 + 1) = 14
+      end: 14
+      inc: 2
+      interval: 2000
+
+out_dir: ../models/test_single_component
+
+wandb:
+  name: "test_single_component"
+
+test_run: False
