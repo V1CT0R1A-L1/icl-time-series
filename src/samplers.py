@@ -100,8 +100,12 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         cluster_assignments = torch.zeros(B, K, dtype=torch.long, device=xs_b.device)
         
         for b in range(B):
-            # Randomly assign a component to each context cluster (can repeat)
-            cluster_assignments[b] = torch.randint(0, K, (K,), device=xs_b.device)
+            # CRITICAL: Ensure all K components appear in the K context clusters (random permutation)
+            # This guarantees the model sees all components in context, enabling proper learning.
+            # Without this, if a component doesn't appear in context clusters, the model can't
+            # learn its weight vector, making predictions impossible when the target uses that component.
+            perm = torch.randperm(K, device=xs_b.device)
+            cluster_assignments[b] = perm
             
             # Fill context clusters: each cluster gets C points from its assigned component
             idx = 0
