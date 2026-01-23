@@ -211,16 +211,30 @@ class TransformerModel(nn.Module):
                     if len(valid_inds) == 0:
                         return torch.zeros(xs.shape[0], 0, device=xs.device)
                     inds = torch.tensor(valid_inds, device=ys.device)
+        
+        # Check if we're predicting all positions (autoregressive mode)
+        # If so, don't mask - model should see all y values for causal prediction
+        predicting_all_positions = (len(inds) == ys.shape[1] and 
+                                     set(inds.tolist()) == set(range(ys.shape[1])))
 
-        # Mask labels at prediction indices ONLY if inds was explicitly provided
-        # For standard autoregressive (inds=None), don't mask - model sees all y values
+        # Mask labels at prediction indices ONLY if:
+        # 1. inds was explicitly provided (not None)
+        # 2. We're NOT predicting all positions (which should be treated as autoregressive)
+        # For standard autoregressive (inds=None or all positions), don't mask - model sees all y values
         ys_input = ys.clone()
-        if not inds_was_none and len(inds) > 0:
+        if not inds_was_none and len(inds) > 0 and not predicting_all_positions:
+            # Causal masking: for each position i, mask only y[i], but allow y[0:i] to be visible
+            # Since attention is already causal, we just mask the current positions
             ys_input[:, inds] = 0.0
             # Diagnostic: verify masking worked (only print once)
             if not hasattr(self, '_masking_verified'):
                 print(f"MODEL DEBUG: Masked {len(inds)} positions. ys_input at masked pos: {ys_input[0, inds[0]].item():.6f}")
                 print(f"MODEL DEBUG: Original ys at masked pos: {ys[0, inds[0]].item():.6f}")
+                self._masking_verified = True
+        elif predicting_all_positions:
+            # Predicting all positions: treat as autoregressive, no masking
+            if not hasattr(self, '_masking_verified'):
+                print(f"MODEL DEBUG: Predicting all {len(inds)} positions (autoregressive mode), no masking")
                 self._masking_verified = True
 
         zs = self._combine(xs, ys_input)

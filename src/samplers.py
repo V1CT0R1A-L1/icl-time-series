@@ -66,14 +66,15 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
     def get_sequence_structure(self):
         """
         Returns sequence structure including keys expected by train.py logging.
+        Now predicts all points in the sequence (autoregressive).
         """
-        predict_position = self.total_length - 1
-        predict_inds = [predict_position]
+        # Predict all points: [0, 1, 2, ..., T-1]
+        predict_inds = list(range(self.total_length))
         return {
             "total_length": self.total_length,
             "predict_inds": predict_inds,
             "context_length": self.contexts_per_component,  # C contexts per component
-            "predict_length": 1,  # We predict one target point
+            "predict_length": self.total_length,  # We predict all points
         }
 
     def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None):
@@ -99,33 +100,6 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         component_assignments = torch.zeros(B, T, dtype=torch.long, device=xs_b.device)
         cluster_assignments = torch.zeros(B, K, dtype=torch.long, device=xs_b.device)
         
-        # #region agent log
-        import json
-        import os
-        log_path = os.path.join('.cursor', 'debug.log')
-        os.makedirs('.cursor', exist_ok=True)
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                log_entry = {
-                    "sessionId": "debug-session",
-                    "runId": "pre-randomization",
-                    "hypothesisId": "cluster-order",
-                    "location": "samplers.py:102",
-                    "message": "Before cluster randomization",
-                    "data": {
-                        "B": B,
-                        "K": K,
-                        "C": C,
-                        "T": T,
-                        "T_target": T_target,
-                        "context_clusters_length": K * C
-                    },
-                    "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-                }
-                f.write(json.dumps(log_entry) + '\n')
-        except: pass
-        # #endregion
-        
         for b in range(B):
             # CRITICAL: Ensure all K components appear in the K context clusters (random permutation)
             # This guarantees the model sees all components in context, enabling proper learning.
@@ -135,6 +109,7 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
             cluster_assignments[b] = perm
             
             # Fill context clusters: each cluster gets C points from its assigned component
+            # Clusters are in fixed order: cluster 0, cluster 1, ..., cluster K-1
             idx = 0
             for k in range(K):
                 cluster_comp = cluster_assignments[b, k].item()
@@ -150,88 +125,88 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
             component_assignments[b, target_start:target_context_end] = target_comp
             component_assignments[b, T - 1] = target_comp  # Prediction point also uses same component
         
-        # Randomize the order of context clusters (but keep target cluster at the end)
-        # This makes the task harder by removing positional cues about which cluster is which
-        context_length = K * C
+        # # Randomize the order of context clusters (but keep target cluster at the end)
+        # # This makes the task harder by removing positional cues about which cluster is which
+        # context_length = K * C
         
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                log_entry = {
-                    "sessionId": "debug-session",
-                    "runId": "pre-randomization",
-                    "hypothesisId": "cluster-order",
-                    "location": "samplers.py:140",
-                    "message": "Before reordering - component assignments for first example",
-                    "data": {
-                        "original_component_assignments": component_assignments[0, :context_length].cpu().tolist(),
-                        "target_cluster_assignments": component_assignments[0, context_length:].cpu().tolist()
-                    },
-                    "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-                }
-                f.write(json.dumps(log_entry) + '\n')
-        except: pass
-        # #endregion
+        # # #region agent log
+        # try:
+        #     with open(log_path, 'a', encoding='utf-8') as f:
+        #         log_entry = {
+        #             "sessionId": "debug-session",
+        #             "runId": "pre-randomization",
+        #             "hypothesisId": "cluster-order",
+        #             "location": "samplers.py:140",
+        #             "message": "Before reordering - component assignments for first example",
+        #             "data": {
+        #                 "original_component_assignments": component_assignments[0, :context_length].cpu().tolist(),
+        #                 "target_cluster_assignments": component_assignments[0, context_length:].cpu().tolist()
+        #             },
+        #             "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+        #         }
+        #         f.write(json.dumps(log_entry) + '\n')
+        # except: pass
+        # # #endregion
         
-        for b in range(B):
-            # Create a random permutation of the K context clusters
-            cluster_order = torch.randperm(K, device=xs_b.device)
+        # for b in range(B):
+        #     # Create a random permutation of the K context clusters
+        #     cluster_order = torch.randperm(K, device=xs_b.device)
             
-            # #region agent log
-            try:
-                with open(log_path, 'a', encoding='utf-8') as f:
-                    log_entry = {
-                        "sessionId": "debug-session",
-                        "runId": "pre-randomization",
-                        "hypothesisId": "cluster-order",
-                        "location": "samplers.py:155",
-                        "message": f"Random cluster order for batch {b}",
-                        "data": {
-                            "batch_idx": b,
-                            "cluster_order": cluster_order.cpu().tolist(),
-                            "original_cluster_assignments": cluster_assignments[b].cpu().tolist()
-                        },
-                        "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-                    }
-                    f.write(json.dumps(log_entry) + '\n')
-            except: pass
-            # #endregion
+        #     # #region agent log
+        #     try:
+        #         with open(log_path, 'a', encoding='utf-8') as f:
+        #             log_entry = {
+        #                 "sessionId": "debug-session",
+        #                 "runId": "pre-randomization",
+        #                 "hypothesisId": "cluster-order",
+        #                 "location": "samplers.py:155",
+        #                 "message": f"Random cluster order for batch {b}",
+        #                 "data": {
+        #                     "batch_idx": b,
+        #                     "cluster_order": cluster_order.cpu().tolist(),
+        #                     "original_cluster_assignments": cluster_assignments[b].cpu().tolist()
+        #                 },
+        #                 "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+        #             }
+        #             f.write(json.dumps(log_entry) + '\n')
+        #     except: pass
+        #     # #endregion
             
-            # Reorder context clusters: create new indices for xs and component_assignments
-            new_indices = torch.zeros(context_length, dtype=torch.long, device=xs_b.device)
-            for new_pos, old_cluster_idx in enumerate(cluster_order):
-                old_start = old_cluster_idx * C
-                old_end = old_start + C
-                new_start = new_pos * C
-                new_end = new_start + C
-                new_indices[new_start:new_end] = torch.arange(old_start, old_end, device=xs_b.device)
+        #     # Reorder context clusters: create new indices for xs and component_assignments
+        #     new_indices = torch.zeros(context_length, dtype=torch.long, device=xs_b.device)
+        #     for new_pos, old_cluster_idx in enumerate(cluster_order):
+        #         old_start = old_cluster_idx * C
+        #         old_end = old_start + C
+        #         new_start = new_pos * C
+        #         new_end = new_start + C
+        #         new_indices[new_start:new_end] = torch.arange(old_start, old_end, device=xs_b.device)
             
-            # Reorder xs_b for context clusters
-            xs_b[b, :context_length] = xs_b[b, new_indices]
+        #     # Reorder xs_b for context clusters
+        #     xs_b[b, :context_length] = xs_b[b, new_indices]
             
-            # Reorder component_assignments for context clusters
-            component_assignments[b, :context_length] = component_assignments[b, new_indices]
+        #     # Reorder component_assignments for context clusters
+        #     component_assignments[b, :context_length] = component_assignments[b, new_indices]
             
-            # #region agent log
-            try:
-                with open(log_path, 'a', encoding='utf-8') as f:
-                    log_entry = {
-                        "sessionId": "debug-session",
-                        "runId": "post-randomization",
-                        "hypothesisId": "cluster-order",
-                        "location": "samplers.py:175",
-                        "message": f"After reordering - component assignments for batch {b}",
-                        "data": {
-                            "batch_idx": b,
-                            "reordered_component_assignments": component_assignments[b, :context_length].cpu().tolist(),
-                            "target_cluster_unchanged": component_assignments[b, context_length:].cpu().tolist(),
-                            "cluster_order_used": cluster_order.cpu().tolist()
-                        },
-                        "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-                    }
-                    f.write(json.dumps(log_entry) + '\n')
-            except: pass
-            # #endregion
+        #     # #region agent log
+        #     try:
+        #         with open(log_path, 'a', encoding='utf-8') as f:
+        #             log_entry = {
+        #                 "sessionId": "debug-session",
+        #                 "runId": "post-randomization",
+        #                 "hypothesisId": "cluster-order",
+        #                 "location": "samplers.py:175",
+        #                 "message": f"After reordering - component assignments for batch {b}",
+        #                 "data": {
+        #                     "batch_idx": b,
+        #                     "reordered_component_assignments": component_assignments[b, :context_length].cpu().tolist(),
+        #                     "target_cluster_unchanged": component_assignments[b, context_length:].cpu().tolist(),
+        #                     "cluster_order_used": cluster_order.cpu().tolist()
+        #                 },
+        #                 "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+        #             }
+        #             f.write(json.dumps(log_entry) + '\n')
+        #     except: pass
+        #     # #endregion
 
         self.current_components = components
         self.component_assignments = component_assignments
