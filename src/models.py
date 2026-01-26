@@ -212,10 +212,19 @@ class TransformerModel(nn.Module):
                         return torch.zeros(xs.shape[0], 0, device=xs.device)
                     inds = torch.tensor(valid_inds, device=ys.device)
         
-        # Check if we're predicting all positions (autoregressive mode)
-        # If so, don't mask - model should see all y values for causal prediction
+        # Check if we're predicting all positions
         predicting_all_positions = (len(inds) == ys.shape[1] and 
                                      set(inds.tolist()) == set(range(ys.shape[1])))
+
+        # Predict-every-position without leakage: sequential decode with masked target at each step.
+        # Each inner call uses inds=[i], so it is NOT "all positions" and the masking branch applies.
+        if predicting_all_positions:
+            T = ys.shape[1]
+            preds = []
+            for i in range(T):
+                pred_i = self.forward(xs, ys, inds=[i], sequence_structure=sequence_structure)
+                preds.append(pred_i)
+            return torch.cat(preds, dim=1)
 
         # Mask labels at prediction indices ONLY if:
         # 1. inds was explicitly provided (not None)
@@ -230,11 +239,6 @@ class TransformerModel(nn.Module):
             if not hasattr(self, '_masking_verified'):
                 print(f"MODEL DEBUG: Masked {len(inds)} positions. ys_input at masked pos: {ys_input[0, inds[0]].item():.6f}")
                 print(f"MODEL DEBUG: Original ys at masked pos: {ys[0, inds[0]].item():.6f}")
-                self._masking_verified = True
-        elif predicting_all_positions:
-            # Predicting all positions: treat as autoregressive, no masking
-            if not hasattr(self, '_masking_verified'):
-                print(f"MODEL DEBUG: Predicting all {len(inds)} positions (autoregressive mode), no masking")
                 self._masking_verified = True
 
         zs = self._combine(xs, ys_input)
