@@ -14,9 +14,9 @@ training:
     contexts_per_component: 10  # C (points per context cluster)
     target_cluster_context_points: 5  # T (points with y-values in target cluster for inference)
     noise_std: 0.0
-    scale: 0.5  # Reduced scale to make values smaller, easier to learn
+    scale: 0.1  # Reduced scale to make values smaller, easier to learn
   batch_size: 64
-  learning_rate: 0.001  # Lowered back - 0.0005 was causing oscillations
+  learning_rate: 0.003  # Lowered back - 0.0005 was causing oscillations
   save_every_steps: 1000
   keep_every_steps: 100000
   train_steps: 5001
