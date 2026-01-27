@@ -295,12 +295,13 @@ class TransformerModel(nn.Module):
         
         # Diagnostic: verify prediction extraction
         if not hasattr(self, '_prediction_verified'):
+            x_pos_pred = prediction[:, 0::2, 0]  # predict y_i from representation at x_i (token 2i)
             print(f"\nMODEL PREDICTION DEBUG:")
             print(f"  output shape: {output.shape}")
             print(f"  prediction shape (before indexing): {prediction.shape}")
-            print(f"  prediction[:, 1::2, 0] extracts y positions, shape: {prediction[:, 1::2, 0].shape}")
+            print(f"  prediction[:, 0::2, 0] extracts x positions (predict y_i from x_i), shape: {x_pos_pred.shape}")
             print(f"  inds: {inds}")
-            print(f"  Final output shape: {prediction[:, 1::2, 0][:, inds].shape}")
+            print(f"  Final output shape: {x_pos_pred[:, inds].shape}")
             self._prediction_verified = True
         
         # #region agent log
@@ -310,8 +311,8 @@ class TransformerModel(nn.Module):
             os.makedirs('.cursor', exist_ok=True)
             log_path = os.path.join('.cursor', 'debug.log')
             with open(log_path, 'a', encoding='utf-8') as f:
-                y_positions = prediction[:, 1::2, 0]
-                final_output = y_positions[:, inds]
+                x_positions = prediction[:, 0::2, 0]
+                final_output = x_positions[:, inds]
                 log_entry = {
                     "sessionId": "debug-session",
                     "runId": "run1",
@@ -320,11 +321,11 @@ class TransformerModel(nn.Module):
                     "message": "Prediction extraction values",
                     "data": {
                         "prediction_shape": list(prediction.shape),
-                        "y_positions_shape": list(y_positions.shape),
+                        "x_positions_shape": list(x_positions.shape),
                         "inds": inds.cpu().tolist() if hasattr(inds, 'cpu') else inds,
                         "final_output_shape": list(final_output.shape),
                         "final_output_sample": final_output[0, :3].cpu().tolist() if final_output.shape[1] >= 3 else final_output[0].cpu().tolist(),
-                        "y_positions_sample": y_positions[0, :5].cpu().tolist()
+                        "x_positions_sample": x_positions[0, :5].cpu().tolist()
                     },
                     "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
                 }
@@ -356,7 +357,11 @@ class TransformerModel(nn.Module):
         except: pass
         # #endregion
         
-        return prediction[:, 1::2, 0][:, inds]
+        # Predict y_i from representation at x_i (token 2i), not at y_i (token 2i+1).
+        # Token 2i sees [x0,y0,...,x_{i-1},y_{i-1},x_i] — context + current x — so the model's job
+        # is "given context and x_i, predict y_i". Using the y-position (2i+1) asks it to predict
+        # from [x0,y0,...,x_i,0], which can encourage predicting mean/zero.
+        return prediction[:, 0::2, 0][:, inds]
 
 
     def get_special_token_info(self):
