@@ -16,7 +16,7 @@ training:
     noise_std: 0.0
     scale: 0.1  # Reduced scale to make values smaller, easier to learn
   batch_size: 64
-  learning_rate: 0.003  # Lowered back - 0.0005 was causing oscillations
+  learning_rate: 0.003
   save_every_steps: 1000
   keep_every_steps: 100000
   train_steps: 5001
