@@ -3,7 +3,7 @@ inherit:
   - wandb.yaml
 
 model:
-  n_dims: 20        # input dimension
+  n_dims: 5        # input dimension
   n_positions: 50   # need max_allowed_length = n_positions // 2 >= 20, so n_positions >= 40 (using 50 for safety)
 
 training:
