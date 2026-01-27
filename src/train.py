@@ -320,6 +320,14 @@ def train(model, args, device):
             task = task_sampler(**task_sampler_args)
             ys = task.evaluate(xs)
 
+        # Per-sequence target normalization: makes optimization independent of data scale.
+        # Use normalize_ys: true when scale is large (e.g. 0.5–1.0) so the model learns structure
+        # instead of "predict zero" (small scale) or failing to converge (large scale).
+        if task_kwargs.get('normalize_ys', False):
+            ys_mean = ys.mean(dim=1, keepdim=True)
+            ys_std = ys.std(dim=1, keepdim=True) + 1e-6
+            ys = (ys - ys_mean) / ys_std
+
         # print(f"DEBUG: xs shape: {xs.shape}, ys shape: {ys.shape}")
         # print(f"DEBUG: predict_inds: {predict_inds}")
         # print(f"DEBUG: sequence_structure total_length: {sequence_structure['total_length'] if sequence_structure else 'None'}")
