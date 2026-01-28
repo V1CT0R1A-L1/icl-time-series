@@ -20,7 +20,8 @@ import wandb
 torch.backends.cudnn.benchmark = True
 
 
-def train_step(model, xs, ys, optimizer, loss_func, predict_inds=None, sequence_structure=None):
+def train_step(model, xs, ys, optimizer, loss_func, predict_inds=None, sequence_structure=None, loss_inds=None):
+    """loss_inds: optional list of indices into predict_inds to use for loss (e.g. exclude first-of-segment)."""
     optimizer.zero_grad()
     
     if predict_inds is None or len(predict_inds) == 0:
@@ -31,7 +32,13 @@ def train_step(model, xs, ys, optimizer, loss_func, predict_inds=None, sequence_
             output = model(xs, ys, inds=predict_inds, sequence_structure=sequence_structure)
         else:
             output = model(xs, ys, inds=predict_inds)
-        loss = loss_func(output, ys[:, predict_inds])
+        if loss_inds is not None and len(loss_inds) > 0:
+            # Restrict loss to positions with in-context signal (e.g. exclude first of each segment).
+            pred_sub = output[:, loss_inds]
+            tgt_sub = ys[:, [predict_inds[j] for j in loss_inds]]
+            loss = loss_func(pred_sub, tgt_sub)
+        else:
+            loss = loss_func(output, ys[:, predict_inds])
     
     # #region agent log
     import json
@@ -334,9 +341,23 @@ def train(model, args, device):
 
         loss_func = task.get_training_metric()
 
+        # For group_mixture_linear, optionally restrict loss to "predictable" positions only.
+        # First-of-segment positions (0, C, 2C, ..., K*C) have no in-context (x,y) from the same component,
+        # so the model cannot infer the mapping; loss stays ~variance there and can dominate the average.
+        loss_inds = None
+        if (predict_inds is not None and len(predict_inds) > 0 and
+            args.training.task == "group_mixture_linear" and
+            task_kwargs.get('exclude_first_of_segment_loss', False)):
+            K = getattr(data_sampler, 'n_components', 2)
+            C = getattr(data_sampler, 'contexts_per_component', 10)
+            first_of_segment = {k * C for k in range(K + 1)}
+            loss_inds = [j for j in range(len(predict_inds)) if predict_inds[j] not in first_of_segment]
+            if len(loss_inds) == 0:
+                loss_inds = None  # fallback to all positions
+
         loss, output = train_step(
-            model, xs.to(device), ys.to(device), optimizer, loss_func, 
-            predict_inds, sequence_structure
+            model, xs.to(device), ys.to(device), optimizer, loss_func,
+            predict_inds, sequence_structure, loss_inds=loss_inds
         )
         
         # Critical diagnostic: check if loss is being computed correctly
@@ -392,7 +413,20 @@ def train(model, args, device):
         else:
             # Original behavior - predict all positions
             point_wise_loss = point_wise_loss_func(output, ys.to(device)).mean(dim=0)
-            point_wise_tags = list(range(ys.shape[1])) 
+            point_wise_tags = list(range(ys.shape[1]))
+
+        # Diagnostic: loss on first-of-segment vs rest (for group_mixture_linear)
+        if (predict_inds is not None and len(predict_inds) > 0 and
+            args.training.task == "group_mixture_linear" and len(point_wise_loss) == len(predict_inds)):
+            K = getattr(data_sampler, 'n_components', 2)
+            C = getattr(data_sampler, 'contexts_per_component', 10)
+            first_of_segment = {k * C for k in range(K + 1)}
+            idx_first = [j for j in range(len(predict_inds)) if predict_inds[j] in first_of_segment]
+            idx_rest = [j for j in range(len(predict_inds)) if predict_inds[j] not in first_of_segment]
+            loss_first_of_segment = point_wise_loss[idx_first].mean().item() if idx_first else float('nan')
+            loss_rest = point_wise_loss[idx_rest].mean().item() if idx_rest else float('nan')
+            if i < 3 or (i % 500 == 0 and i > 0):
+                print(f"  [group_mixture] loss_first_of_segment={loss_first_of_segment:.4f} (pos {first_of_segment}), loss_rest={loss_rest:.4f}")
 
         if predict_inds is not None and len(predict_inds) > 0:
             # For multi-context, use a reasonable baseline
@@ -417,11 +451,16 @@ def train(model, args, device):
                 "n_points": curriculum.n_points,
                 "n_dims": curriculum.n_dims_truncated,
             }
-            
+            # Loss on first-of-segment vs rest (group_mixture_linear diagnostic)
+            if (predict_inds is not None and len(predict_inds) > 0 and
+                args.training.task == "group_mixture_linear" and len(point_wise_loss) == len(predict_inds)):
+                log_data["loss_first_of_segment"] = loss_first_of_segment
+                log_data["loss_rest"] = loss_rest
+
             # Add lag info if available
             if curriculum.lag is not None:
                 log_data["lag"] = curriculum.lag
-            
+
             if hasattr(task, 'get_mixture_info'):
                 mix_info = task.get_mixture_info()
                 log_data["n_components"] = mix_info['n_components']
