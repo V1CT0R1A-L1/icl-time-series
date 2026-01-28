@@ -359,6 +359,12 @@ def train(model, args, device):
             model, xs.to(device), ys.to(device), optimizer, loss_func,
             predict_inds, sequence_structure, loss_inds=loss_inds
         )
+
+        # Why loss ~1 when predicting one position: if targets are normalized (variance 1) and predictions ~0, MSE≈1.
+        if i == 0 and predict_inds is not None and len(predict_inds) == 1:
+            tgt = ys[:, predict_inds[0]].to(device)
+            pred = output[:, 0]
+            print(f"  [single-target] pred mean={pred.mean().item():.4f} std={pred.std().item():.4f}  tgt mean={tgt.mean().item():.4f} std={tgt.std().item():.4f}  -> want pred to track tgt for loss to drop")
         
         # Critical diagnostic: check if loss is being computed correctly
         if i == 0:

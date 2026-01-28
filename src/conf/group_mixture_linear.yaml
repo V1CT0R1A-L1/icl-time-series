@@ -14,8 +14,8 @@ training:
     contexts_per_component: 10  # C (points per context cluster)
     target_cluster_context_points: 6  # T (points with y-values in target cluster for inference)
     noise_std: 0.0
-    scale: 1.0
-    normalize_ys: true         # per-sequence target norm
+    scale: 0.5                # target scale; with normalize_ys false, loss can drop as model learns (normalize_ys true often keeps loss ~1 if read_out init was too small)
+    normalize_ys: false       # set true to report MSE in normalized space; false lets model learn the raw mapping and usually gives decreasing loss
     predict_target_only: true  # standard ICL: predict only the target query (last position) given full context; report MSE on that position
   batch_size: 64
   learning_rate: 0.003
