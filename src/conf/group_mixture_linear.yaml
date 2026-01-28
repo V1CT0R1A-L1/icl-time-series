@@ -18,7 +18,8 @@ training:
     normalize_ys: false       # set true to report MSE in normalized space; false lets model learn the raw mapping and usually gives decreasing loss
     predict_target_only: true  # standard ICL: predict only the target query (last position) given full context; report MSE on that position
   batch_size: 64
-  learning_rate: 0.003
+  learning_rate: 0.0005   # lower LR so loss can descend to ~0 in noiseless case (0.003 often plateaus at ~0.3)
+  lr_warmup_steps: 300    # linear warmup; helps loss descend smoothly in noiseless ICL
   save_every_steps: 1000
   keep_every_steps: 100000
   train_steps: 5001

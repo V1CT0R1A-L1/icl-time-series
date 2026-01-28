@@ -180,7 +180,16 @@ def train(model, args, device):
             print(f"Calculated predict indices: {predict_inds}")
     
     for i in pbar:
-            
+        # LR warmup so loss descends smoothly in noiseless ICL
+        warmup = getattr(args.training, 'lr_warmup_steps', 0)
+        base_lr = args.training.learning_rate
+        if warmup > 0 and i < warmup:
+            for g in optimizer.param_groups:
+                g['lr'] = base_lr * (i + 1) / warmup
+        else:
+            for g in optimizer.param_groups:
+                g['lr'] = base_lr
+
         data_sampler_args = {}
         task_sampler_args = {}
 

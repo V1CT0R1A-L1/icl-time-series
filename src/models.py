@@ -97,11 +97,17 @@ class TransformerModel(nn.Module):
         self.n_dims = n_dims
         self._read_in = nn.Linear(n_dims, n_embd)
         self._backbone = GPT2Model(configuration)
-        self._read_out = nn.Linear(n_embd, 1)
-        # Larger init so outputs can reach ±1 when targets are normalized; default init often yields ~0 and loss sticks at ~1.
+        # 2-layer MLP head so the model can map representation → prediction (single Linear often plateaus at ~0.3 MSE in noiseless ICL).
+        self._read_out = nn.Sequential(
+            nn.Linear(n_embd, n_embd),
+            nn.ReLU(),
+            nn.Linear(n_embd, 1),
+        )
         with torch.no_grad():
-            nn.init.normal_(self._read_out.weight, 0, 0.1)
-            nn.init.zeros_(self._read_out.bias)
+            nn.init.normal_(self._read_out[0].weight, 0, 0.02)
+            nn.init.zeros_(self._read_out[0].bias)
+            nn.init.normal_(self._read_out[2].weight, 0, 0.1)
+            nn.init.zeros_(self._read_out[2].bias)
 
         # Special token handling
         self.sep_token_id = sep_token_id
