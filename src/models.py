@@ -19,6 +19,7 @@ def build_model(conf):
             n_embd=conf.n_embd,
             n_layer=conf.n_layer,
             n_head=conf.n_head,
+            use_pairs_format=getattr(conf, 'use_pairs_format', False),
         )
     else:
         raise NotImplementedError
@@ -78,9 +79,10 @@ def get_relevant_baselines(task_name):
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, 
-                 sep_token_id=-1, predict_token_id=-2):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4,
+                 sep_token_id=-1, predict_token_id=-2, use_pairs_format=False):
         super(TransformerModel, self).__init__()
+        self.use_pairs_format = use_pairs_format
         configuration = GPT2Config(
             n_positions=2 * n_positions,
             n_embd=n_embd,
@@ -96,6 +98,10 @@ class TransformerModel(nn.Module):
         self.n_positions = n_positions
         self.n_dims = n_dims
         self._read_in = nn.Linear(n_dims, n_embd)
+        if use_pairs_format:
+            self._read_in_pairs = nn.Linear(n_dims + 1, n_embd)  # one token per (x,y): [x; y]
+        else:
+            self._read_in_pairs = None
         self._backbone = GPT2Model(configuration)
         # 2-layer MLP head so the model can map representation → prediction (single Linear often plateaus at ~0.3 MSE in noiseless ICL).
         self._read_out = nn.Sequential(
@@ -113,6 +119,8 @@ class TransformerModel(nn.Module):
         self.sep_token_id = sep_token_id
         self.predict_token_id = predict_token_id
         self.special_embeddings = nn.Embedding(2, n_embd)  # 2 special tokens: SEP and PREDICT
+        # Token-type embedding: even positions = x, odd = y. Lets the model disambiguate input vs target slots.
+        self.token_type_embedding = nn.Embedding(2, n_embd)
 
     @staticmethod
     def _combine(xs_b, ys_b):
@@ -251,9 +259,25 @@ class TransformerModel(nn.Module):
                 print(f"MODEL DEBUG: Original ys at masked pos: {ys[0, inds[0]].item():.6f}")
                 self._masking_verified = True
 
+        # One-token-per-(x,y) format when predicting only the last position: T tokens, each [x_i; y_i], last is [x_query; 0].
+        # Standard ICL layout; often easier for the model to learn than interleaved (x0,y0,x1,y1,...).
+        if (self.use_pairs_format and self._read_in_pairs is not None and
+            len(inds) == 1 and inds[0].item() == ys.shape[1] - 1):
+            zs_pairs = torch.cat([xs, ys_input.unsqueeze(-1)], dim=-1)  # (B, T, d+1)
+            embeds_pairs = self._read_in_pairs(zs_pairs)
+            if sequence_structure is not None:
+                embeds_pairs = self._add_special_token_embeddings(embeds_pairs, sequence_structure)
+            out = self._backbone(inputs_embeds=embeds_pairs).last_hidden_state
+            pred = self._read_out(out)
+            return pred[:, -1, 0].unsqueeze(-1)  # (B, 1)
+
         zs = self._combine(xs, ys_input)
         embeds = self._read_in(zs)
-        
+        # Add token-type so the model knows which positions are x vs y (even = x, odd = y).
+        seq_len = embeds.size(1)
+        type_ids = torch.arange(seq_len, device=embeds.device) % 2
+        embeds = embeds + self.token_type_embedding(type_ids).unsqueeze(0)
+
         # #region agent log
         import json
         import os

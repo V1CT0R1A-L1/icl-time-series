@@ -5,6 +5,7 @@ inherit:
 model:
   n_dims: 5        # input dimension
   n_positions: 80   # need max_allowed_length = n_positions // 2 >= 20, so n_positions >= 40 (using 50 for safety)
+  use_pairs_format: true  # one token per (x,y), last token = [x_query; 0]; standard ICL layout, often learns better than interleaved
 
 training:
   task: group_mixture_linear
