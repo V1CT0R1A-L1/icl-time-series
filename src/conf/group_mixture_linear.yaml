@@ -15,8 +15,8 @@ training:
     target_cluster_context_points: 6  # T (points with y-values in target cluster for inference)
     noise_std: 0.0
     scale: 1.0
-    normalize_ys: true         # per-sequence target norm; use with scale>=0.5 so model learns structure instead of predicting zero
-    exclude_first_of_segment_loss: true  # train only on positions with in-context (x,y); first-of-segment has no signal so loss stays ~1 there
+    normalize_ys: true         # per-sequence target norm
+    predict_target_only: true  # standard ICL: predict only the target query (last position) given full context; report MSE on that position
   batch_size: 64
   learning_rate: 0.003
   save_every_steps: 1000

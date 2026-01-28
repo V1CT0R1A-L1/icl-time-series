@@ -46,6 +46,8 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         self.target_cluster_context_points = target_cluster_context_points  # T
         self.noise_std = noise_std
         self.scale = scale
+        # Predict only the target query (last position): standard ICL evaluation, full context, clear learning signal.
+        self.predict_target_only = kwargs.pop('predict_target_only', True)
 
         # Base sampler for xs (just Gaussian)
         filtered_kwargs = {}
@@ -66,15 +68,20 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
     def get_sequence_structure(self):
         """
         Returns sequence structure including keys expected by train.py logging.
-        Now predicts all points in the sequence (autoregressive).
+        If predict_target_only: predict only the last (target query) position — standard ICL setup, full context.
+        Else: predict all positions (autoregressive).
         """
-        # Predict all points: [0, 1, 2, ..., T-1]
-        predict_inds = list(range(self.total_length))
+        if self.predict_target_only:
+            predict_inds = [self.total_length - 1]
+            predict_length = 1
+        else:
+            predict_inds = list(range(self.total_length))
+            predict_length = self.total_length
         return {
             "total_length": self.total_length,
             "predict_inds": predict_inds,
             "context_length": self.contexts_per_component,  # C contexts per component
-            "predict_length": self.total_length,  # We predict all points
+            "predict_length": predict_length,
         }
 
     def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None):
