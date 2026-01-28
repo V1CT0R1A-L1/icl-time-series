@@ -24,7 +24,7 @@ training:
   lr_warmup_steps: 300    # linear warmup; helps loss descend smoothly in noiseless ICL
   save_every_steps: 1000
   keep_every_steps: 100000
-  train_steps: 5001
+  train_steps: 10001
   curriculum:
     dims:
       start: 20
