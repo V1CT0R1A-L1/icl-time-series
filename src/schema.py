@@ -56,6 +56,7 @@ training_schema = {
     "save_every_steps": merge(tinteger, default(1000)),  # how often to checkpoint
     "keep_every_steps": merge(tinteger, default(-1)),  # permanent checkpoints
     "resume_id": merge(tstring, nullable, default(None)),  # run uuid64
+    "resume_extra_steps": merge(tinteger, nullable, default(None)),  # when resuming, train this many more steps
     "curriculum": stdict(curriculum_schema),
 }
 

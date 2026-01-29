@@ -1,0 +1,14 @@
+# Resume a specific run for extra steps. Inherits everything from group_mixture_linear.
+# Usage: python train.py --config conf/group_mixture_linear_resume.yaml
+# Ensure state.pt exists at: <out_dir>/<resume_id>/state.pt
+inherit:
+  - group_mixture_linear.yaml
+
+training:
+  resume_id: "0092300d-259b-46b0-bfa7-2117e360f05d"
+  resume_extra_steps: 5000
+
+# If state.pt lives elsewhere, set out_dir to the *parent* of the run dir (the dir that contains the run_id folder).
+# Example: state at models/group_mixture_linear/0092300d-.../state.pt => out_dir: models/group_mixture_linear
+# When running from src/: default out_dir is ../models/group_mixture_linear (inherited). Uncomment and set if needed:
+# out_dir: /path/to/models/group_mixture_linear

@@ -123,6 +123,7 @@ def train(model, args, device):
         starting_step = state["train_step"]
         for i in range(state["train_step"] + 1):
             curriculum.update()
+        print(f"Resumed from step {starting_step} (state.pt)")
 
     n_dims = model.n_dims
     print("n_dims: ", n_dims)
@@ -163,7 +164,14 @@ def train(model, args, device):
         num_tasks=args.training.num_tasks,
         **task_kwargs,
     )
-    pbar = tqdm(range(starting_step, args.training.train_steps))
+    # When resuming, optionally run extra steps: end_step = starting_step + resume_extra_steps
+    resume_extra = getattr(args.training, 'resume_extra_steps', None)
+    if starting_step > 0 and resume_extra is not None and resume_extra > 0:
+        end_step = starting_step + resume_extra
+        print(f"Resume mode: training for {resume_extra} more steps (until step {end_step})")
+    else:
+        end_step = args.training.train_steps
+    pbar = tqdm(range(starting_step, end_step))
 
     num_training_examples = args.training.num_training_examples
 
@@ -591,7 +599,8 @@ def load_config(config_path):
         'training': {
             'num_tasks': None,
             'num_training_examples': None,
-            'resume_id': None
+            'resume_id': None,
+            'resume_extra_steps': None,  # when resuming, train this many more steps (e.g. 5000)
         },
         'wandb': {
             'entity': None,
