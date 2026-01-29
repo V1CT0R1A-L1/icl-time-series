@@ -697,7 +697,6 @@ if __name__ == "__main__":
     config = load_config(cmd_args.config)
     args = create_args_namespace(config)
     
-    assert args.model.family in ["gpt2", "lstm"]
 
     if not args.test_run:
         run_id = args.training.resume_id
