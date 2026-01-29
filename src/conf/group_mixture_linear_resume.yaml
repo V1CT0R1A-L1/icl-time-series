@@ -3,6 +3,8 @@
 # Ensure state.pt exists at: <out_dir>/<resume_id>/state.pt
 inherit:
   - group_mixture_linear.yaml
+  - models/standard.yaml
+  - wandb.yaml
 
 training:
   resume_id: "0092300d-259b-46b0-bfa7-2117e360f05d"
