@@ -20,7 +20,7 @@ training:
     # Switch: true = predict ONE position (target query only). false = predict ALL positions.
     predict_target_only: false
     # Switch: false = group into clusters (cluster 0, cluster 1, ..., target). true = shuffle data points (keep last as query).
-    shuffle_context_points: false
+    shuffle_context_points: true
   batch_size: 64
   learning_rate: 0.0005   # lower LR so loss can descend to ~0 in noiseless case (0.003 often plateaus at ~0.3)
   lr_warmup_steps: 300    # linear warmup; helps loss descend smoothly in noiseless ICL
