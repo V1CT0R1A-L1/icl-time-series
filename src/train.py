@@ -116,7 +116,7 @@ def train(model, args, device):
 
     starting_step = 0
     state_path = os.path.join(args.out_dir, "state.pt")
-    resume_if_exists = getattr(args.training, "resume", True)
+    resume_if_exists = getattr(args.training, "resume", False)
     if resume_if_exists and os.path.exists(state_path):
         state = torch.load(state_path)
         model.load_state_dict(state["model_state_dict"])
