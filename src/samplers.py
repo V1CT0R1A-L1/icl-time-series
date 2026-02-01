@@ -48,6 +48,9 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         self.scale = scale
         # Predict only the target query (last position): standard ICL evaluation, full context, clear learning signal.
         self.predict_target_only = kwargs.pop('predict_target_only', True)
+        # When False (default): data ordered by clusters (cluster 0, cluster 1, ..., target cluster).
+        # When True: shuffle context/target points (permute positions 0..T-2, keep last as query).
+        self.shuffle_context_points = kwargs.pop('shuffle_context_points', False)
 
         # Base sampler for xs (just Gaussian)
         filtered_kwargs = {}
@@ -214,6 +217,14 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         #             f.write(json.dumps(log_entry) + '\n')
         #     except: pass
         #     # #endregion
+
+        # Optional: shuffle data points (positions 0..T-2) so sequence is not grouped by cluster; last position stays query.
+        if self.shuffle_context_points:
+            for b in range(B):
+                perm = torch.randperm(T - 1, device=xs_b.device)
+                new_order = torch.cat([perm, torch.tensor([T - 1], device=xs_b.device, dtype=perm.dtype)])
+                xs_b[b] = xs_b[b, new_order]
+                component_assignments[b] = component_assignments[b, new_order]
 
         self.current_components = components
         self.component_assignments = component_assignments
