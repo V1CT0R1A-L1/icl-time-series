@@ -7,6 +7,7 @@ inherit:
   - wandb.yaml
 
 training:
+  resume: true   # set false to start from step 0 in this run dir (ignore state.pt)
   resume_id: "0092300d-259b-46b0-bfa7-2117e360f05d"
   resume_extra_steps: 5000
 

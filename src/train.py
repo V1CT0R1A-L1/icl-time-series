@@ -116,7 +116,8 @@ def train(model, args, device):
 
     starting_step = 0
     state_path = os.path.join(args.out_dir, "state.pt")
-    if os.path.exists(state_path):
+    resume_if_exists = getattr(args.training, "resume", True)
+    if resume_if_exists and os.path.exists(state_path):
         state = torch.load(state_path)
         model.load_state_dict(state["model_state_dict"])
         optimizer.load_state_dict(state["optimizer_state_dict"])
@@ -124,6 +125,8 @@ def train(model, args, device):
         for i in range(state["train_step"] + 1):
             curriculum.update()
         print(f"Resumed from step {starting_step} (state.pt)")
+    elif not resume_if_exists and os.path.exists(state_path):
+        print("resume: false — ignoring existing state.pt, starting from step 0")
 
     n_dims = model.n_dims
     print("n_dims: ", n_dims)
@@ -516,6 +519,13 @@ def train(model, args, device):
             and i > 0
         ):
             torch.save(model.state_dict(), os.path.join(args.out_dir, f"model_{i}.pt"))
+            # Also save full state so you can restore to this step (e.g. copy state_9000.pt -> state.pt)
+            training_state = {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "train_step": i,
+            }
+            torch.save(training_state, os.path.join(args.out_dir, f"state_{i}.pt"))
 
         if i % 100 == 0:
             print(f"Step {i}: Loss={loss:.4f}, Baseline={baseline_loss:.4f}, Excess={loss/baseline_loss:.4f}")
@@ -599,6 +609,7 @@ def load_config(config_path):
         'training': {
             'num_tasks': None,
             'num_training_examples': None,
+            'resume': True,  # if False, ignore state.pt and start from step 0
             'resume_id': None,
             'resume_extra_steps': None,  # when resuming, train this many more steps (e.g. 5000)
         },
