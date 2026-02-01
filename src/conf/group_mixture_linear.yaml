@@ -18,9 +18,9 @@ training:
     scale: 0.5                # target scale
     normalize_ys: false       # set true to report MSE in normalized space
     # Switch: true = predict ONE position (target query only). false = predict ALL positions.
-    predict_target_only: false
+    predict_target_only: true
     # Switch: false = group into clusters (cluster 0, cluster 1, ..., target). true = shuffle data points (keep last as query).
-    shuffle_context_points: false
+    shuffle_context_points: true
   batch_size: 64
   learning_rate: 0.0005   # lower LR so loss can descend to ~0 in noiseless case (0.003 often plateaus at ~0.3)
   lr_warmup_steps: 300    # linear warmup; helps loss descend smoothly in noiseless ICL
@@ -28,7 +28,7 @@ training:
   keep_every_steps: 100000   # also saves state_{step}.pt at these steps so you can restore (e.g. copy state_9000.pt -> state.pt)
   train_steps: 10001
   # resume: true = load state.pt when present. resume: false = always start from step 0 (ignore state.pt).
-  resume: true
+  resume: false
   curriculum:
     dims:
       start: 20
