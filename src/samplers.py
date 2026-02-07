@@ -87,12 +87,15 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
             "predict_length": predict_length,
         }
 
-    def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None):
+    def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None, **kwargs):
         if n_points != self.total_length:
             raise ValueError(
                 f"OnTheFlyMixtureLinearSampler expected n_points={self.total_length}, "
                 f"got {n_points}"
             )
+        # Optional fixed assignments for eval (e.g. context clusters = [0,1], target = 0 or 1)
+        fixed_cluster_assignments = kwargs.pop("fixed_cluster_assignments", None)  # (K,) or (B, K)
+        fixed_target_component = kwargs.pop("fixed_target_component", None)  # scalar or (B,)
 
         xs_b = self.base_sampler.sample_xs(
             n_points, b_size, n_dims_truncated=n_dims_truncated, seeds=seeds
@@ -106,20 +109,23 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         # Sample K components per example: w ~ N(0, I) then scaled
         components = torch.randn(B, K, d, 1, device=xs_b.device) * self.scale  # (B,K,d,1)
 
-        # For each example, randomly assign components to clusters
+        if fixed_cluster_assignments is not None and not isinstance(fixed_cluster_assignments, torch.Tensor):
+            fixed_cluster_assignments = torch.tensor(fixed_cluster_assignments, dtype=torch.long, device=xs_b.device)
+        if fixed_target_component is not None and not isinstance(fixed_target_component, torch.Tensor):
+            fixed_target_component = torch.tensor(fixed_target_component, dtype=torch.long, device=xs_b.device)
+
+        # For each example, assign components to clusters (random or fixed)
         component_assignments = torch.zeros(B, T, dtype=torch.long, device=xs_b.device)
         cluster_assignments = torch.zeros(B, K, dtype=torch.long, device=xs_b.device)
         
         for b in range(B):
-            # CRITICAL: Ensure all K components appear in the K context clusters (random permutation)
-            # This guarantees the model sees all components in context, enabling proper learning.
-            # Without this, if a component doesn't appear in context clusters, the model can't
-            # learn its weight vector, making predictions impossible when the target uses that component.
-            perm = torch.randperm(K, device=xs_b.device)
-            cluster_assignments[b] = perm
+            if fixed_cluster_assignments is not None:
+                cluster_assignments[b] = fixed_cluster_assignments[b] if fixed_cluster_assignments.dim() > 1 else fixed_cluster_assignments
+            else:
+                perm = torch.randperm(K, device=xs_b.device)
+                cluster_assignments[b] = perm
             
             # Fill context clusters: each cluster gets C points from its assigned component
-            # Clusters are in fixed order: cluster 0, cluster 1, ..., cluster K-1
             idx = 0
             for k in range(K):
                 cluster_comp = cluster_assignments[b, k].item()
@@ -128,9 +134,11 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
                 component_assignments[b, start:end] = cluster_comp
                 idx = end
             
-            # Target cluster: randomly select a component, use it for T context points + 1 prediction point
-            target_comp = torch.randint(0, K, (1,), device=xs_b.device).item()
-            target_start = K * C  # Start of target cluster
+            if fixed_target_component is not None:
+                target_comp = int(fixed_target_component[b].item()) if fixed_target_component.dim() > 0 else int(fixed_target_component.item())
+            else:
+                target_comp = torch.randint(0, K, (1,), device=xs_b.device).item()
+            target_start = K * C
             target_context_end = target_start + T_target
             component_assignments[b, target_start:target_context_end] = target_comp
             component_assignments[b, T - 1] = target_comp  # Prediction point also uses same component
