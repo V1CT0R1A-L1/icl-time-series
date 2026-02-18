@@ -155,8 +155,10 @@ def train(model, args, device):
         # For multi-context tasks, use the multi_context_mixture sampler
         data_sampler = get_data_sampler("multi_context_mixture", n_dims=n_dims, **task_kwargs)
     elif args.training.task == "group_mixture_linear":
-        # On-the-fly grouped mixture linear sampler
-        data_sampler = get_data_sampler("group_mixture_linear", n_dims=n_dims, **task_kwargs)
+        # On-the-fly grouped mixture linear sampler; curriculum.points drives contexts_per_component (C)
+        task_kwargs_gml = dict(task_kwargs)
+        task_kwargs_gml["contexts_per_component"] = curriculum.n_points
+        data_sampler = get_data_sampler("group_mixture_linear", n_dims=n_dims, **task_kwargs_gml)
     else:
         data_sampler = get_data_sampler(args.training.data, n_dims=args.training.curriculum.dims.start)
 
@@ -216,6 +218,16 @@ def train(model, args, device):
                 data_sampler = get_data_sampler("ar_warmup", n_dims=n_dims, lag=current_lag, noise_std=noise_std)
             # Update task_kwargs with current lag for task sampler
             task_sampler_args["lag"] = current_lag
+
+        if args.training.task == "group_mixture_linear" and getattr(data_sampler, 'contexts_per_component', None) != curriculum.n_points:
+            task_kwargs_gml = dict(task_kwargs)
+            task_kwargs_gml["contexts_per_component"] = curriculum.n_points
+            data_sampler = get_data_sampler("group_mixture_linear", n_dims=n_dims, **task_kwargs_gml)
+            sequence_structure = data_sampler.get_sequence_structure()
+            predict_inds = sequence_structure.get("predict_inds", [])
+            if not predict_inds and "predict_position" in sequence_structure:
+                predict_start = sequence_structure["predict_position"] + 1
+                predict_inds = list(range(predict_start, sequence_structure["total_length"]))
 
         if "sparse" in args.training.task:
             task_sampler_args["valid_coords"] = curriculum.n_dims_truncated
