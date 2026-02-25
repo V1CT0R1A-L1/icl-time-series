@@ -37,12 +37,12 @@ training:
       start: 2
       end: 5
       inc: 1
-      interval: 2000
+      interval: 5000
     points:
       start: 5
       end: 10
       inc: 1
-      interval: 2000
+      interval: 5000
 
 out_dir: ../models/group_mixture_linear
 
