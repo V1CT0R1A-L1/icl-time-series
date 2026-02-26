@@ -623,6 +623,7 @@ def load_config(config_path):
             'num_training_examples': None,
             'resume': True,  # if False, ignore state.pt and start from step 0
             'resume_id': None,
+            'wandb_resume_id': None,  # wandb run id (e.g. q251a116) to resume same run
             'resume_extra_steps': None,  # when resuming, train this many more steps (e.g. 5000)
         },
         'wandb': {
@@ -679,15 +680,21 @@ def main(args):
         args.training.train_steps = 100
     else:
         try:
-            wandb.init(
+            wandb_kwargs = dict(
                 dir=args.out_dir,
                 project=args.wandb.project,
                 entity=args.wandb.entity,
                 config=args.__dict__,
                 notes=args.wandb.notes,
                 name=args.wandb.name,
-                resume=True,
             )
+            wandb_resume_id = getattr(args.training, "wandb_resume_id", None)
+            if wandb_resume_id:
+                wandb_kwargs["id"] = wandb_resume_id
+                wandb_kwargs["resume"] = "must"
+            else:
+                wandb_kwargs["resume"] = True
+            wandb.init(**wandb_kwargs)
         except Exception as e:
             print(f"Warning: Could not initialize wandb: {e}")
             print("Continuing without wandb logging...")

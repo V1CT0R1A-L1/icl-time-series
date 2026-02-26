@@ -1,15 +1,19 @@
 # Resume a specific run for extra steps. Inherits everything from group_mixture_linear.
 # Usage: python train.py --config conf/group_mixture_linear_resume.yaml
 # Ensure state.pt exists at: <out_dir>/<resume_id>/state.pt
+#
+# To find resume_id (folder UUID) for wandb run q251a116, run from project root:
+#   cd models/group_mixture_linear && for d in */; do [ -d "${d}wandb" ] && ls "${d}wandb" 2>/dev/null | grep -q q251a116 && echo "${d%/}"; done
 inherit:
   - group_mixture_linear.yaml
   - models/standard.yaml
   - wandb.yaml
 
 training:
-  resume: true   # set false to start from step 0 in this run dir (ignore state.pt)
-  resume_id: "4afc4037-a5ae-4e69-b212-7b068abdba47"
-  resume_extra_steps: 10000
+  resume: true
+  resume_id: "e76a34c7-298e-41f5-ab01-058336a45a82"   # folder containing state.pt (find via command above)
+  wandb_resume_id: "q251a116"             # from wandb URL: .../runs/q251a116
+  resume_extra_steps: 20000
 
 # If state.pt lives elsewhere, set out_dir to the *parent* of the run dir (the dir that contains the run_id folder).
 # Example: state at models/group_mixture_linear/0092300d-.../state.pt => out_dir: models/group_mixture_linear
