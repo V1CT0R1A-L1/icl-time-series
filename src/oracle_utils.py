@@ -47,8 +47,9 @@ def compute_oracle_mse_by_position(
     # Target cluster: iterate over positions (causal: each position uses only prior target context)
     for t in range(context_length, T):
         if t == context_length:
-            # Uniform mixture over K
-            preds_c = (xs[:, t:t + 1] @ components).squeeze(-1)  # (B, K)
+            # Uniform mixture over K: (B, 1, d) @ (B, d, K) -> (B, 1, K)
+            comp_flat = components[:, :, :, 0].transpose(1, 2)  # (B, d, K)
+            preds_c = (xs[:, t:t + 1] @ comp_flat).squeeze(1)  # (B, K)
             y_pred[:, t] = preds_c.mean(dim=1) * scale / output_norm_factor
         else:
             ctx_x = xs[:, context_length:t]  # (B, n_ctx, d)
