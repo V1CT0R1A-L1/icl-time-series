@@ -4,7 +4,7 @@ inherit:
 
 model:
   n_dims: 5        # input dimension
-  n_positions: 122   # need n_positions//2 >= max length; K=3,C=10,T=6 => 37, so >= 74
+  n_positions: 100   # need n_positions//2 >= max length; K=3,C=10,T=6 => 37, so >= 74
   use_pairs_format: true  # one token per (x,y), last token = [x_query; 0]; standard ICL layout, often learns better than interleaved
 
 training:
@@ -39,8 +39,8 @@ training:
       inc: 1
       interval: 5000
     points:
-      start: 10
-      end: 10
+      start: 8
+      end: 8
       inc: 1
       interval: 5000
 
