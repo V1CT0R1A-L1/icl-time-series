@@ -11,9 +11,9 @@ training:
   task: group_mixture_linear
   data: group_mixture_linear
   task_kwargs:
-    n_components: 3             # K (number of components)
+    n_components: 5             # K (number of components)
     contexts_per_component: 10  # C (final value; curriculum.points drives current C during training)
-    target_cluster_context_points: 5  # T (points with y-values in target cluster for inference)
+    target_cluster_context_points: 10  # T (points with y-values in target cluster for inference)
     noise_std: 0.0
     scale: 0.5                # target scale
     normalize_ys: false       # set true to report MSE in normalized space
@@ -37,12 +37,12 @@ training:
       start: 2
       end: 5
       inc: 1
-      interval: 3000
+      interval: 5000
     points:
-      start: 5
+      start: 10
       end: 10
       inc: 1
-      interval: 3000
+      interval: 5000
 
 out_dir: ../models/group_mixture_linear
 
