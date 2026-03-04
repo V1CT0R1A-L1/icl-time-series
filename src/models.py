@@ -137,6 +137,22 @@ class TransformerModel(nn.Module):
         zs = zs.view(bsize, 2 * points, dim)
         return zs
 
+    def get_hidden_states(self, xs, ys, sequence_structure=None):
+        """
+        Single forward pass returning last_hidden_state for all positions.
+        Uses interleaved format: token 2t = x_t, 2t+1 = y_t.
+        Returns (B, 2*T, n_embd). Map (x,y) position t -> hidden[:, 2*t+1].
+        """
+        zs = self._combine(xs, ys)
+        embeds = self._read_in(zs)
+        seq_len = embeds.size(1)
+        type_ids = torch.arange(seq_len, device=embeds.device) % 2
+        embeds = embeds + self.token_type_embedding(type_ids).unsqueeze(0)
+        if sequence_structure is not None:
+            embeds = self._add_special_token_embeddings(embeds, sequence_structure)
+        out = self._backbone(inputs_embeds=embeds).last_hidden_state
+        return out
+
     def _add_special_token_embeddings(self, embeds, sequence_structure):
         """
         Add special token embeddings to the input embeddings.
