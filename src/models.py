@@ -153,6 +153,21 @@ class TransformerModel(nn.Module):
         out = self._backbone(inputs_embeds=embeds).last_hidden_state
         return out
 
+    def get_attention(self, xs, ys, sequence_structure=None):
+        """
+        Single forward pass returning attention weights. Same embedding as get_hidden_states.
+        Returns tuple of (n_layer,) tensors, each (B, n_head, seq_len, seq_len).
+        """
+        zs = self._combine(xs, ys)
+        embeds = self._read_in(zs)
+        seq_len = embeds.size(1)
+        type_ids = torch.arange(seq_len, device=embeds.device) % 2
+        embeds = embeds + self.token_type_embedding(type_ids).unsqueeze(0)
+        if sequence_structure is not None:
+            embeds = self._add_special_token_embeddings(embeds, sequence_structure)
+        outputs = self._backbone(inputs_embeds=embeds, output_attentions=True)
+        return outputs.attentions
+
     def _add_special_token_embeddings(self, embeds, sequence_structure):
         """
         Add special token embeddings to the input embeddings.
