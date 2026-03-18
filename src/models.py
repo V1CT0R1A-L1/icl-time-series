@@ -168,6 +168,25 @@ class TransformerModel(nn.Module):
         outputs = self._backbone(inputs_embeds=embeds, output_attentions=True)
         return outputs.attentions
 
+    def get_residual_stream_by_layer(self, xs, ys, sequence_structure=None):
+        """
+        Return residual stream at every layer (for Prediction Lens / Logit Lens style analysis).
+        Same embedding path as get_hidden_states. Model predicts y from the *x* token at each
+        position (prediction[:, 0::2, 0]), so the "query" token for the last position is 2*(T-1).
+        Returns:
+            hidden_states: tuple of (1 + n_layer) tensors, each (B, seq_len, n_embd).
+            Layer 0 = after embedding; layer L = after L-th transformer block (= last_hidden_state).
+        """
+        zs = self._combine(xs, ys)
+        embeds = self._read_in(zs)
+        seq_len = embeds.size(1)
+        type_ids = torch.arange(seq_len, device=embeds.device) % 2
+        embeds = embeds + self.token_type_embedding(type_ids).unsqueeze(0)
+        if sequence_structure is not None:
+            embeds = self._add_special_token_embeddings(embeds, sequence_structure)
+        outputs = self._backbone(inputs_embeds=embeds, output_hidden_states=True)
+        return outputs.hidden_states
+
     def _add_special_token_embeddings(self, embeds, sequence_structure):
         """
         Add special token embeddings to the input embeddings.
