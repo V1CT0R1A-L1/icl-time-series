@@ -1,14 +1,18 @@
 """
-Oracle baseline for group_mixture_linear evaluation.
+Baselines for group_mixture_linear evaluation.
 
-Oracle knows the STRUCTURE (K clusters of C points, target cluster with T_target + 1)
-but NOT the true coefficients. It fits w via least squares from observed (x,y) pairs.
-- Context clusters: fit w from (x,y) in that cluster (causal: only prior points).
-- Target cluster: posterior over K context components; predict with weighted average
-  of context_ws using p(k|target_data). Posterior updated sequentially as data arrives.
-- First position of each segment: no data to fit -> predict 0.
-- Prior: target cluster uses one of the K context components -> at target's first
-  position, predict with uniform mixture over the K fitted context w's.
+1) Bayesian mixture baseline (``compute_bayesian_mixture_mse_by_position``):
+   Knows STRUCTURE (K clusters of C points, target cluster) but not which component
+   is the true target without inference. Fits w via least squares on context;
+   on the target cluster uses a posterior over the K context components from observed
+   target (x,y) and predicts with the posterior mean of w.
+   First position of each context segment: no prior points -> 0. Target's first
+   position: uniform mixture over the K fitted context w's.
+
+2) True mixture oracle (``compute_true_mixture_oracle_mse_by_position``):
+   Knows the true component index at every position and the true weights ``components``.
+   Predicts y_t = x_t^T w_{k_t} (same generative mean as the task). MSE vs noisy ys
+   is irreducible noise on average.
 """
 import torch
 
@@ -86,17 +90,16 @@ def _posterior_and_predict(seg_x, seg_y, context_ws, x_query, sigma, device):
     return y_pred
 
 
-def compute_oracle_mse_by_position(
+def compute_bayesian_mixture_mse_by_position(
     xs, ys, components, component_assignments, K, C, T_target, scale, output_norm_factor=None,
     target_noise_std=1.0,
 ):
     """
-    Compute per-position MSE of the least-squares oracle.
+    Per-position MSE for the Bayesian mixture baseline (structure known, w inferred).
 
-    Oracle knows the STRUCTURE and that the TARGET uses one of the K context
-    components. Context: fits w via least squares.     Target: posterior over K
-    components, predict with p(k|data) * w_k. target_noise_std: noise scale for
-    likelihood (default 1.0). (components, component_assignments, scale ignored.)
+    Context: least-squares fit (causal). Target: posterior over K components from
+    target data; ``components`` / ``component_assignments`` are unused (kept for API
+    symmetry with the true oracle). ``target_noise_std`` scales the Gaussian likelihood.
     """
     B, T, d = xs.shape
     context_length = K * C
@@ -149,3 +152,26 @@ def compute_oracle_mse_by_position(
 
     sq_err = (y_pred - ys) ** 2
     return sq_err.mean(dim=0).cpu().numpy()
+
+
+def compute_true_mixture_oracle_mse_by_position(xs, ys, components, component_assignments, scale):
+    """
+    Per-position MSE when the predictor knows the true mixture: at each position t,
+    uses ground-truth w_k from ``components[b, k]`` with k = ``component_assignments[b, t]``.
+
+    Matches the task mean E[y|x] (no label noise in the prediction); squared error
+    vs observed ``ys`` reflects observation noise where ``noise_std > 0``.
+    """
+    B, T, d = xs.shape
+    device = xs.device
+    components = components.to(device)
+    comp_ids = component_assignments.to(device).long()
+    batch_idx = torch.arange(B, device=device).unsqueeze(1).expand(B, T)
+    w_for_points = components[batch_idx, comp_ids]
+    y_pred = (xs.unsqueeze(-2) @ w_for_points).squeeze(-1).squeeze(-1) * scale
+    sq_err = (y_pred - ys) ** 2
+    return sq_err.mean(dim=0).cpu().numpy()
+
+
+# Backward-compatible name
+compute_oracle_mse_by_position = compute_bayesian_mixture_mse_by_position
