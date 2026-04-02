@@ -2,6 +2,10 @@
 Baselines for group_mixture_linear evaluation.
 
 - **Ground truth (known mixture)**: true w_k per position — ``compute_ground_truth_mixture_mse_by_position``.
+- **True w, unknown assignment (Bayes)**: knows ``components`` but not which component
+  sits in which context cluster or target; uniform prior over context permutations and
+  over target component — ``compute_true_w_unknown_assignment_bayesian_mse_by_position``
+  (K!·K enumeration; K≤8).
 - **Bayesian mixture**: causal LS per context cluster; on the target, posterior over
   K context components from target (x,y) — ``compute_bayesian_mixture_mse_by_position``.
 - **Pure LS**: same context as above; on the target, a single causal LS model fit only
@@ -11,6 +15,7 @@ Baselines for group_mixture_linear evaluation.
 
 Use ``compute_all_group_mixture_baselines_mse_by_position`` for a dict of all curves (extensible).
 """
+import itertools
 from collections import OrderedDict
 
 import torch
@@ -60,7 +65,7 @@ def _fit_w_tensor(seg_x, seg_y, d, device):
                 )
             ws[b] = wb.squeeze(-1)
         except Exception:
-            pass  # leave zeros
+            pass
     return ws
 
 
@@ -191,6 +196,101 @@ def compute_ground_truth_mixture_mse_by_position(xs, ys, components, component_a
     return sq_err.mean(dim=0).cpu().numpy()
 
 
+def compute_true_w_unknown_assignment_bayesian_mse_by_position(
+    xs, ys, components, component_assignments, K, C, T_target, scale,
+    output_norm_factor=None,
+    target_noise_std=1.0,
+):
+    """
+    Knows the true weight vectors ``w_0..w_{K-1}`` (from ``components`` × ``scale``)
+    but not **which** component is active in **which** context cluster or in the target.
+
+    Prior: uniform over permutations σ assigning the K components to the K context
+    cluster slots (each component appears once in context, matching the sampler), and
+    uniform τ ∈ {0..K-1} for the target cluster. Causal Gaussian likelihood on observed
+    (x,y) with noise scale ``target_noise_std``; posterior mean prediction at each t.
+
+    ``component_assignments`` is unused (API parity). Enumeration cost is O(K!·K·T·B);
+    raises if K > 8.
+    """
+    del output_norm_factor, component_assignments
+    if K > 8:
+        raise ValueError(
+            "compute_true_w_unknown_assignment_bayesian_mse_by_position: K>8 makes K! "
+            "enumeration too large; reduce K or skip this baseline."
+        )
+
+    B, T, d = xs.shape
+    device = xs.device
+    context_length = K * C
+    sigma_n = float(target_noise_std) if target_noise_std is not None else 1.0
+    sigma_n = max(sigma_n, 1e-8)
+
+    perms = list(itertools.permutations(range(K)))
+    n_perm = len(perms)
+
+    components = components.to(device)
+    w_all = (components.squeeze(-1) * scale).to(device)
+
+    y_pred = torch.zeros(B, T, device=device)
+    inv_2sig2 = -0.5 / (sigma_n ** 2)
+
+    for b in range(B):
+        w = w_all[b]
+        xb, yb = xs[b], ys[b]
+
+        log_p_ctx_full = torch.empty(n_perm, device=device)
+        for pi, sigma in enumerate(perms):
+            ll = xb.new_tensor(0.0)
+            for u in range(context_length):
+                j = sigma[u // C]
+                pred_u = (xb[u] * w[j]).sum()
+                ll = ll + inv_2sig2 * (yb[u] - pred_u) ** 2
+            log_p_ctx_full[pi] = ll
+
+        for t in range(T):
+            if t < context_length:
+                logs = torch.empty(n_perm, device=device)
+                for pi, sigma in enumerate(perms):
+                    ll = xb.new_tensor(0.0)
+                    for u in range(t):
+                        j = sigma[u // C]
+                        pred_u = (xb[u] * w[j]).sum()
+                        ll = ll + inv_2sig2 * (yb[u] - pred_u) ** 2
+                    logs[pi] = ll
+                logs = logs - torch.logsumexp(logs, dim=0)
+                p_sigma = torch.exp(logs)
+                c_t = t // C
+                pred_t = xb.new_tensor(0.0)
+                for pi, sigma in enumerate(perms):
+                    pred_t = pred_t + p_sigma[pi] * (xb[t] * w[sigma[c_t]]).sum()
+                y_pred[b, t] = pred_t
+            else:
+                n_joint = n_perm * K
+                logs_joint = torch.empty(n_joint, device=device)
+                jidx = 0
+                for pi, sigma in enumerate(perms):
+                    ll_c = log_p_ctx_full[pi]
+                    for tau in range(K):
+                        ll = ll_c.clone()
+                        for u in range(context_length, t):
+                            pred_u = (xb[u] * w[tau]).sum()
+                            ll = ll + inv_2sig2 * (yb[u] - pred_u) ** 2
+                        logs_joint[jidx] = ll
+                        jidx += 1
+                logs_joint = logs_joint - torch.logsumexp(logs_joint, dim=0)
+                p_joint = torch.exp(logs_joint)
+                jidx = 0
+                pred_t = xb.new_tensor(0.0)
+                for pi in range(n_perm):
+                    for tau in range(K):
+                        pred_t = pred_t + p_joint[jidx] * (xb[t] * w[tau]).sum()
+                        jidx += 1
+                y_pred[b, t] = pred_t
+
+    return _mse_from_predictions(y_pred, ys)
+
+
 def compute_bayesian_mixture_mse_by_position(
     xs, ys, components, component_assignments, K, C, T_target, scale, output_norm_factor=None,
     target_noise_std=1.0,
@@ -247,12 +347,19 @@ def compute_all_group_mixture_baselines_mse_by_position(
     """
     All built-in baselines as (name -> (T,) numpy MSE per position).
 
-    Order is stable for plotting: ground truth, Bayesian, pure LS target, hybrid.
+    Order is stable for plotting: ground truth, unknown-assignment Bayes (true w),
+    Bayesian (LS context), pure LS target, hybrid.
     Extend this dict when adding new methods.
     """
     out = OrderedDict()
     out["ground_truth"] = compute_ground_truth_mixture_mse_by_position(
         xs, ys, components, component_assignments, scale
+    )
+    out["true_w_unknown_assignment_bayesian"] = (
+        compute_true_w_unknown_assignment_bayesian_mse_by_position(
+            xs, ys, components, component_assignments, K, C, T_target, scale,
+            target_noise_std=target_noise_std,
+        )
     )
     out["bayesian_mixture"] = compute_bayesian_mixture_mse_by_position(
         xs, ys, components, component_assignments, K, C, T_target, scale,
