@@ -1,19 +1,18 @@
 """
 Baselines for group_mixture_linear evaluation.
 
-1) Bayesian mixture baseline (``compute_bayesian_mixture_mse_by_position``):
-   Knows STRUCTURE (K clusters of C points, target cluster) but not which component
-   is the true target without inference. Fits w via least squares on context;
-   on the target cluster uses a posterior over the K context components from observed
-   target (x,y) and predicts with the posterior mean of w.
-   First position of each context segment: no prior points -> 0. Target's first
-   position: uniform mixture over the K fitted context w's.
+- **Ground truth (known mixture)**: true w_k per position — ``compute_ground_truth_mixture_mse_by_position``.
+- **Bayesian mixture**: causal LS per context cluster; on the target, posterior over
+  K context components from target (x,y) — ``compute_bayesian_mixture_mse_by_position``.
+- **Pure LS**: same context as above; on the target, a single causal LS model fit only
+  to target-segment (x,y) (ignores mixture over K) — ``compute_pure_ls_target_mse_by_position``.
+- **Hybrid**: on the target only, ``alpha`` * Bayesian + (1-alpha) * pure-LS target —
+  ``compute_hybrid_bayesian_ls_mse_by_position``.
 
-2) True mixture oracle (``compute_true_mixture_oracle_mse_by_position``):
-   Knows the true component index at every position and the true weights ``components``.
-   Predicts y_t = x_t^T w_{k_t} (same generative mean as the task). MSE vs noisy ys
-   is irreducible noise on average.
+Use ``compute_all_group_mixture_baselines_mse_by_position`` for a dict of all curves (extensible).
 """
+from collections import OrderedDict
+
 import torch
 
 
@@ -90,77 +89,96 @@ def _posterior_and_predict(seg_x, seg_y, context_ws, x_query, sigma, device):
     return y_pred
 
 
-def compute_bayesian_mixture_mse_by_position(
-    xs, ys, components, component_assignments, K, C, T_target, scale, output_norm_factor=None,
-    target_noise_std=1.0,
+def _predictions_context_clusters_causal(xs, ys, K, C, d, T, context_length, device):
+    """Causal LS within each context cluster; first point in each cluster predicts 0."""
+    y_pred = torch.zeros(xs.shape[0], T, device=device)
+    for t in range(context_length):
+        k = t // C
+        start = k * C
+        n_prev = t - start
+        if n_prev == 0:
+            y_pred[:, t] = 0.0
+        else:
+            seg_x = xs[:, start:t]
+            seg_y = ys[:, start:t]
+            y_pred[:, t] = _fit_w_per_batch(seg_x, seg_y, xs[:, t], d, device)
+    return y_pred
+
+
+def _precompute_context_ws(xs, ys, K, C, d, device):
+    """Fitted w from full context segment per cluster: (K, B, d)."""
+    context_ws = torch.zeros(K, xs.shape[0], d, device=device)
+    for k in range(K):
+        start, end = k * C, (k + 1) * C
+        context_ws[k] = _fit_w_tensor(xs[:, start:end], ys[:, start:end], d, device)
+    return context_ws
+
+
+def _predictions_group_mixture_target_branch(
+    xs, ys, K, C, d, T, context_length, device, sigma, context_ws, y_pred, target_mode,
 ):
     """
-    Per-position MSE for the Bayesian mixture baseline (structure known, w inferred).
-
-    Context: least-squares fit (causal). Target: posterior over K components from
-    target data; ``components`` / ``component_assignments`` are unused (kept for API
-    symmetry with the true oracle). ``target_noise_std`` scales the Gaussian likelihood.
+    Fill target positions [context_length, T) in y_pred.
+    target_mode: \"bayesian\" | \"pure_ls_target\"
     """
+    w_mean = context_ws.mean(dim=0)
+    target_start = context_length
+    for t in range(context_length, T):
+        n_prev = t - target_start
+        x_t = xs[:, t]
+        if n_prev == 0:
+            if target_mode == "bayesian":
+                y_pred[:, t] = (x_t * w_mean).sum(dim=1)
+            else:
+                y_pred[:, t] = 0.0
+        else:
+            seg_x = xs[:, target_start:t]
+            seg_y = ys[:, target_start:t]
+            if target_mode == "bayesian":
+                y_pred[:, t] = _posterior_and_predict(
+                    seg_x, seg_y, context_ws, x_t, sigma, device
+                )
+            else:
+                y_pred[:, t] = _fit_w_per_batch(seg_x, seg_y, x_t, d, device)
+    return y_pred
+
+
+def _predictions_bayesian_mixture_inner(xs, ys, K, C, T_target, target_noise_std):
+    """Full-sequence predictions: causal LS per context cluster + Bayesian target."""
     B, T, d = xs.shape
     context_length = K * C
     device = xs.device
     sigma = float(target_noise_std) if target_noise_std is not None else 1.0
-
-    # Precompute fitted w for each context cluster (using full cluster data)
-    context_ws = torch.zeros(K, B, d, device=device)
-    for k in range(K):
-        start, end = k * C, (k + 1) * C
-        seg_x = xs[:, start:end]
-        seg_y = ys[:, start:end]
-        context_ws[k] = _fit_w_tensor(seg_x, seg_y, d, device)
-
-    # w_mean[b] = mean over k of context_ws[k,b]; shape (B, d)
-    w_mean = context_ws.mean(dim=0)
-
-    y_pred = torch.zeros_like(ys)
-
-    # Iterate over positions; fit w from prior (x,y) in segment via least squares
-    for t in range(T):
-        if t < context_length:
-            # Context: which cluster? cluster k has positions [k*C, (k+1)*C)
-            k = t // C
-            start = k * C
-            # Causal: use positions [start, t) from this cluster
-            n_prev = t - start
-            if n_prev == 0:
-                y_pred[:, t] = 0.0
-            else:
-                seg_x = xs[:, start:t]
-                seg_y = ys[:, start:t]
-                y_pred[:, t] = _fit_w_per_batch(seg_x, seg_y, xs[:, t], d, device)
-        else:
-            # Target cluster: positions [context_length, T)
-            # Prior: target uses one of the K context components
-            target_start = context_length
-            n_prev = t - target_start
-            x_t = xs[:, t]  # (B, d)
-            if n_prev == 0:
-                # No target data yet: predict with uniform mixture over K context w's
-                y_pred[:, t] = (x_t * w_mean).sum(dim=1)
-            else:
-                # Posterior over K components from target data so far; predict with weighted average
-                seg_x = xs[:, target_start:t]  # (B, n_prev, d)
-                seg_y = ys[:, target_start:t]  # (B, n_prev)
-                y_pred[:, t] = _posterior_and_predict(
-                    seg_x, seg_y, context_ws, x_t, sigma, device
-                )
-
-    sq_err = (y_pred - ys) ** 2
-    return sq_err.mean(dim=0).cpu().numpy()
+    context_ws = _precompute_context_ws(xs, ys, K, C, d, device)
+    y_pred = _predictions_context_clusters_causal(xs, ys, K, C, d, T, context_length, device)
+    return _predictions_group_mixture_target_branch(
+        xs, ys, K, C, d, T, context_length, device, sigma, context_ws, y_pred, "bayesian",
+    )
 
 
-def compute_true_mixture_oracle_mse_by_position(xs, ys, components, component_assignments, scale):
+def _predictions_pure_ls_target_inner(xs, ys, K, C, T_target, target_noise_std):
+    """Same context as Bayesian; target = single causal LS on target segment only."""
+    B, T, d = xs.shape
+    context_length = K * C
+    device = xs.device
+    sigma = float(target_noise_std) if target_noise_std is not None else 1.0
+    context_ws = _precompute_context_ws(xs, ys, K, C, d, device)
+    y_pred = _predictions_context_clusters_causal(xs, ys, K, C, d, T, context_length, device)
+    return _predictions_group_mixture_target_branch(
+        xs, ys, K, C, d, T, context_length, device, sigma, context_ws, y_pred, "pure_ls_target",
+    )
+
+
+def _mse_from_predictions(y_pred, ys):
+    return ((y_pred - ys) ** 2).mean(dim=0).detach().cpu().numpy()
+
+
+def compute_ground_truth_mixture_mse_by_position(xs, ys, components, component_assignments, scale):
     """
-    Per-position MSE when the predictor knows the true mixture: at each position t,
-    uses ground-truth w_k from ``components[b, k]`` with k = ``component_assignments[b, t]``.
+    Per-position MSE when w_k is known at every position: uses ``components[b, k]`` with
+    k = ``component_assignments[b, t]`` (same mean as the generative task).
 
-    Matches the task mean E[y|x] (no label noise in the prediction); squared error
-    vs observed ``ys`` reflects observation noise where ``noise_std > 0``.
+    Squared error vs observed ``ys`` reflects observation noise where ``noise_std > 0``.
     """
     B, T, d = xs.shape
     device = xs.device
@@ -173,5 +191,85 @@ def compute_true_mixture_oracle_mse_by_position(xs, ys, components, component_as
     return sq_err.mean(dim=0).cpu().numpy()
 
 
-# Backward-compatible name
+def compute_bayesian_mixture_mse_by_position(
+    xs, ys, components, component_assignments, K, C, T_target, scale, output_norm_factor=None,
+    target_noise_std=1.0,
+):
+    """
+    Per-position MSE for the Bayesian mixture baseline (structure known, w inferred).
+
+    Context: least-squares fit (causal). Target: posterior over K components from
+    target data; ``components`` / ``component_assignments`` are unused (kept for API
+    symmetry with the ground-truth baseline). ``target_noise_std`` scales the Gaussian likelihood.
+    """
+    y_pred = _predictions_bayesian_mixture_inner(xs, ys, K, C, T_target, target_noise_std)
+    return _mse_from_predictions(y_pred, ys)
+
+
+def compute_pure_ls_target_mse_by_position(
+    xs, ys, components, component_assignments, K, C, T_target, scale, output_norm_factor=None,
+    target_noise_std=1.0,
+):
+    """
+    Causal LS within each context cluster (same as Bayesian context). On the target
+    segment, a single linear model fit by causal LS to target (x,y) only — no mixture
+    over the K components.
+    """
+    y_pred = _predictions_pure_ls_target_inner(xs, ys, K, C, T_target, target_noise_std)
+    return _mse_from_predictions(y_pred, ys)
+
+
+def compute_hybrid_bayesian_ls_mse_by_position(
+    xs, ys, components, component_assignments, K, C, T_target, scale, output_norm_factor=None,
+    target_noise_std=1.0,
+    hybrid_alpha=0.5,
+):
+    """
+    Context: same as Bayesian / pure LS. Target positions: ``hybrid_alpha`` * Bayesian
+    prediction + (1 - ``hybrid_alpha``) * pure-LS-on-target-only prediction (default 0.5 each).
+    """
+    y_b = _predictions_bayesian_mixture_inner(xs, ys, K, C, T_target, target_noise_std)
+    y_p = _predictions_pure_ls_target_inner(xs, ys, K, C, T_target, target_noise_std)
+    context_length = K * C
+    y_h = y_b.clone()
+    a = float(hybrid_alpha)
+    y_h[:, context_length:] = (
+        a * y_b[:, context_length:] + (1.0 - a) * y_p[:, context_length:]
+    )
+    return _mse_from_predictions(y_h, ys)
+
+
+def compute_all_group_mixture_baselines_mse_by_position(
+    xs, ys, components, component_assignments, K, C, T_target, scale,
+    target_noise_std=1.0,
+    hybrid_alpha=0.5,
+):
+    """
+    All built-in baselines as (name -> (T,) numpy MSE per position).
+
+    Order is stable for plotting: ground truth, Bayesian, pure LS target, hybrid.
+    Extend this dict when adding new methods.
+    """
+    out = OrderedDict()
+    out["ground_truth"] = compute_ground_truth_mixture_mse_by_position(
+        xs, ys, components, component_assignments, scale
+    )
+    out["bayesian_mixture"] = compute_bayesian_mixture_mse_by_position(
+        xs, ys, components, component_assignments, K, C, T_target, scale,
+        target_noise_std=target_noise_std,
+    )
+    out["pure_ls_target"] = compute_pure_ls_target_mse_by_position(
+        xs, ys, components, component_assignments, K, C, T_target, scale,
+        target_noise_std=target_noise_std,
+    )
+    out["hybrid_bayesian_ls"] = compute_hybrid_bayesian_ls_mse_by_position(
+        xs, ys, components, component_assignments, K, C, T_target, scale,
+        target_noise_std=target_noise_std,
+        hybrid_alpha=hybrid_alpha,
+    )
+    return out
+
+
+# Backward-compatible names
 compute_oracle_mse_by_position = compute_bayesian_mixture_mse_by_position
+compute_true_mixture_oracle_mse_by_position = compute_ground_truth_mixture_mse_by_position
