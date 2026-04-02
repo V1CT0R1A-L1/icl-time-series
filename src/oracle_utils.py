@@ -15,6 +15,10 @@ Baselines for group_mixture_linear evaluation.
 
 Use ``compute_all_group_mixture_baselines_mse_by_position`` for a dict of all curves (extensible).
 
+**Observation noise:** pass ``target_noise_std`` from the task. If ``<= 0``, Bayesian updates use the
+noiseless limit: uniform posterior over hypotheses with minimum SSE (not Gaussian smoothing).
+If ``None``, Gaussian likelihood defaults to ``sigma=1.0`` for mixture baselines only.
+
 For interventions, ``ablate_matching_context_cluster`` zeros the context cluster whose
 component matches the target component (same expert as the target segment).
 """
@@ -22,6 +26,17 @@ import itertools
 from collections import OrderedDict
 
 import torch
+
+
+def _posterior_uniform_argmin_from_sse(sse):
+    """Uniform over hypotheses with minimum SSE (noiseless / σ→0 Bayes limit). sse: (n,) or (B, K)."""
+    if sse.dim() == 1:
+        min_sse = sse.min()
+        mask = torch.isclose(sse, min_sse.expand_as(sse), rtol=1e-5, atol=1e-6).float()
+        return mask / mask.sum().clamp_min(1e-12)
+    min_sse = sse.min(dim=1, keepdim=True)[0]
+    mask = torch.isclose(sse, min_sse, rtol=1e-5, atol=1e-6).float()
+    return mask / mask.sum(dim=1, keepdim=True).clamp_min(1e-12)
 
 
 def ablate_matching_context_cluster(xs, ys, component_assignments, K, C):
@@ -97,26 +112,28 @@ def _fit_w_tensor(seg_x, seg_y, d, device):
     return ws
 
 
-def _posterior_and_predict(seg_x, seg_y, context_ws, x_query, sigma, device):
+def _posterior_and_predict(seg_x, seg_y, context_ws, x_query, sigma, device, *, noiseless=False):
     """
     Compute p(k|data) from target (seg_x, seg_y) and predict y = x_query @ w_eff.
-    Likelihood: y_i = x_i @ w_k + eps, eps ~ N(0, sigma^2).
-    Returns (B,) predictions.
+
+    If ``noiseless`` is True: uniform posterior over k minimizing sum of squared residuals.
+    Else: Gaussian likelihood with ``sigma`` (observation noise).
     """
     B, n_obs, d = seg_x.shape
     K = context_ws.shape[0]
-    # log p(data|k) = -0.5/sigma^2 * sum_i (y_i - x_i @ w_k)^2 + const
-    log_lik = torch.zeros(B, K, device=device)
+    sse = torch.zeros(B, K, device=device)
     for k in range(K):
-        # pred[b,i] = seg_x[b,i] @ context_ws[k,b]
         pred_k = (seg_x * context_ws[k].unsqueeze(1)).sum(dim=2)  # (B, n_obs)
-        sq_err = (seg_y - pred_k) ** 2
-        log_lik[:, k] = -0.5 * sq_err.sum(dim=1) / (sigma ** 2)
-    # Uniform prior: log p(k) = -log(K)
-    log_post = log_lik - torch.log(torch.tensor(K, dtype=torch.float32, device=device))
-    log_post = log_post - torch.logsumexp(log_post, dim=1, keepdim=True)
-    p_k = torch.exp(log_post)  # (B, K)
-    # w_eff[b] = sum_k p_k[b,k] * context_ws[k,b]
+        sse[:, k] = ((seg_y - pred_k) ** 2).sum(dim=1)
+
+    if noiseless:
+        p_k = _posterior_uniform_argmin_from_sse(sse)
+    else:
+        sig = max(float(sigma), 1e-8)
+        log_lik = -0.5 * sse / (sig ** 2)
+        log_post = log_lik - torch.log(torch.tensor(K, dtype=torch.float32, device=device))
+        log_post = log_post - torch.logsumexp(log_post, dim=1, keepdim=True)
+        p_k = torch.exp(log_post)
     w_eff = (p_k.unsqueeze(2) * context_ws.permute(1, 0, 2)).sum(dim=1)  # (B, d)
     y_pred = (x_query * w_eff).sum(dim=1)
     return y_pred
@@ -149,6 +166,8 @@ def _precompute_context_ws(xs, ys, K, C, d, device):
 
 def _predictions_group_mixture_target_branch(
     xs, ys, K, C, d, T, context_length, device, sigma, context_ws, y_pred, target_mode,
+    *,
+    target_noiseless=False,
 ):
     """
     Fill target positions [context_length, T) in y_pred.
@@ -169,7 +188,7 @@ def _predictions_group_mixture_target_branch(
             seg_y = ys[:, target_start:t]
             if target_mode == "bayesian":
                 y_pred[:, t] = _posterior_and_predict(
-                    seg_x, seg_y, context_ws, x_t, sigma, device
+                    seg_x, seg_y, context_ws, x_t, sigma, device, noiseless=target_noiseless
                 )
             else:
                 y_pred[:, t] = _fit_w_per_batch(seg_x, seg_y, x_t, d, device)
@@ -181,11 +200,17 @@ def _predictions_bayesian_mixture_inner(xs, ys, K, C, T_target, target_noise_std
     B, T, d = xs.shape
     context_length = K * C
     device = xs.device
-    sigma = float(target_noise_std) if target_noise_std is not None else 1.0
+    if target_noise_std is None:
+        sigma, target_noiseless = 1.0, False
+    elif float(target_noise_std) <= 0.0:
+        sigma, target_noiseless = 1.0, True
+    else:
+        sigma, target_noiseless = float(target_noise_std), False
     context_ws = _precompute_context_ws(xs, ys, K, C, d, device)
     y_pred = _predictions_context_clusters_causal(xs, ys, K, C, d, T, context_length, device)
     return _predictions_group_mixture_target_branch(
         xs, ys, K, C, d, T, context_length, device, sigma, context_ws, y_pred, "bayesian",
+        target_noiseless=target_noiseless,
     )
 
 
@@ -235,8 +260,11 @@ def compute_true_w_unknown_assignment_bayesian_mse_by_position(
 
     Prior: uniform over permutations σ assigning the K components to the K context
     cluster slots (each component appears once in context, matching the sampler), and
-    uniform τ ∈ {0..K-1} for the target cluster. Causal Gaussian likelihood on observed
-    (x,y) with noise scale ``target_noise_std``; posterior mean prediction at each t.
+    uniform τ ∈ {0..K-1} for the target cluster.
+
+    If ``target_noise_std`` is None or > 0: Gaussian likelihood on (x,y) with that σ.
+    If ``target_noise_std`` <= 0: **noiseless** — uniform posterior over hypotheses
+    with minimum SSE (Bayes limit for σ→0).
 
     ``component_assignments`` is unused (API parity). Enumeration cost is O(K!·K·T·B);
     raises if K > 8.
@@ -251,7 +279,12 @@ def compute_true_w_unknown_assignment_bayesian_mse_by_position(
     B, T, d = xs.shape
     device = xs.device
     context_length = K * C
-    sigma_n = float(target_noise_std) if target_noise_std is not None else 1.0
+    if target_noise_std is None:
+        sigma_n, noiseless = 1.0, False
+    elif float(target_noise_std) <= 0.0:
+        sigma_n, noiseless = 1.0, True
+    else:
+        sigma_n, noiseless = float(target_noise_std), False
     sigma_n = max(sigma_n, 1e-8)
 
     perms = list(itertools.permutations(range(K)))
@@ -261,53 +294,60 @@ def compute_true_w_unknown_assignment_bayesian_mse_by_position(
     w_all = (components.squeeze(-1) * scale).to(device)
 
     y_pred = torch.zeros(B, T, device=device)
-    inv_2sig2 = -0.5 / (sigma_n ** 2)
 
     for b in range(B):
         w = w_all[b]
         xb, yb = xs[b], ys[b]
 
-        log_p_ctx_full = torch.empty(n_perm, device=device)
-        for pi, sigma in enumerate(perms):
-            ll = xb.new_tensor(0.0)
+        ctx_sse_full = torch.empty(n_perm, device=device)
+        for pi, sigma_perm in enumerate(perms):
+            s = xb.new_tensor(0.0)
             for u in range(context_length):
-                j = sigma[u // C]
+                j = sigma_perm[u // C]
                 pred_u = (xb[u] * w[j]).sum()
-                ll = ll + inv_2sig2 * (yb[u] - pred_u) ** 2
-            log_p_ctx_full[pi] = ll
+                s = s + (yb[u] - pred_u) ** 2
+            ctx_sse_full[pi] = s
 
         for t in range(T):
             if t < context_length:
-                logs = torch.empty(n_perm, device=device)
-                for pi, sigma in enumerate(perms):
-                    ll = xb.new_tensor(0.0)
+                sse_partial = torch.empty(n_perm, device=device)
+                for pi, sigma_perm in enumerate(perms):
+                    s = xb.new_tensor(0.0)
                     for u in range(t):
-                        j = sigma[u // C]
+                        j = sigma_perm[u // C]
                         pred_u = (xb[u] * w[j]).sum()
-                        ll = ll + inv_2sig2 * (yb[u] - pred_u) ** 2
-                    logs[pi] = ll
-                logs = logs - torch.logsumexp(logs, dim=0)
-                p_sigma = torch.exp(logs)
+                        s = s + (yb[u] - pred_u) ** 2
+                    sse_partial[pi] = s
+                if noiseless:
+                    p_sigma = _posterior_uniform_argmin_from_sse(sse_partial)
+                else:
+                    logs = -0.5 * sse_partial / (sigma_n ** 2)
+                    logs = logs - torch.logsumexp(logs, dim=0)
+                    p_sigma = torch.exp(logs)
                 c_t = t // C
                 pred_t = xb.new_tensor(0.0)
-                for pi, sigma in enumerate(perms):
-                    pred_t = pred_t + p_sigma[pi] * (xb[t] * w[sigma[c_t]]).sum()
+                for pi, sigma_perm in enumerate(perms):
+                    pred_t = pred_t + p_sigma[pi] * (xb[t] * w[sigma_perm[c_t]]).sum()
                 y_pred[b, t] = pred_t
             else:
                 n_joint = n_perm * K
-                logs_joint = torch.empty(n_joint, device=device)
+                sse_joint = torch.empty(n_joint, device=device)
                 jidx = 0
-                for pi, sigma in enumerate(perms):
-                    ll_c = log_p_ctx_full[pi]
+                for pi, sigma_perm in enumerate(perms):
+                    s_ctx = ctx_sse_full[pi]
                     for tau in range(K):
-                        ll = ll_c.clone()
+                        s = s_ctx.clone()
                         for u in range(context_length, t):
                             pred_u = (xb[u] * w[tau]).sum()
-                            ll = ll + inv_2sig2 * (yb[u] - pred_u) ** 2
-                        logs_joint[jidx] = ll
+                            s = s + (yb[u] - pred_u) ** 2
+                        sse_joint[jidx] = s
                         jidx += 1
-                logs_joint = logs_joint - torch.logsumexp(logs_joint, dim=0)
-                p_joint = torch.exp(logs_joint)
+                if noiseless:
+                    p_joint = _posterior_uniform_argmin_from_sse(sse_joint)
+                else:
+                    logs_joint = -0.5 * sse_joint / (sigma_n ** 2)
+                    logs_joint = logs_joint - torch.logsumexp(logs_joint, dim=0)
+                    p_joint = torch.exp(logs_joint)
                 jidx = 0
                 pred_t = xb.new_tensor(0.0)
                 for pi in range(n_perm):
@@ -328,7 +368,8 @@ def compute_bayesian_mixture_mse_by_position(
 
     Context: least-squares fit (causal). Target: posterior over K components from
     target data; ``components`` / ``component_assignments`` are unused (kept for API
-    symmetry with the ground-truth baseline). ``target_noise_std`` scales the Gaussian likelihood.
+    symmetry with the ground-truth baseline). If ``target_noise_std > 0``, Gaussian
+    likelihood with that ``sigma``; if ``<= 0``, noiseless (argmin SSE over components).
     """
     y_pred = _predictions_bayesian_mixture_inner(xs, ys, K, C, T_target, target_noise_std)
     return _mse_from_predictions(y_pred, ys)
@@ -377,6 +418,7 @@ def compute_all_group_mixture_baselines_mse_by_position(
 
     Order is stable for plotting: ground truth, unknown-assignment Bayes (true w),
     Bayesian (LS context), pure LS target, hybrid.
+    ``target_noise_std``: pass task noise; ``<= 0`` triggers noiseless Bayes (min-SSE posteriors).
     Extend this dict when adding new methods.
     """
     out = OrderedDict()
