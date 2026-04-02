@@ -14,11 +14,39 @@ Baselines for group_mixture_linear evaluation.
   ``compute_hybrid_bayesian_ls_mse_by_position``.
 
 Use ``compute_all_group_mixture_baselines_mse_by_position`` for a dict of all curves (extensible).
+
+For interventions, ``ablate_matching_context_cluster`` zeros the context cluster whose
+component matches the target component (same expert as the target segment).
 """
 import itertools
 from collections import OrderedDict
 
 import torch
+
+
+def ablate_matching_context_cluster(xs, ys, component_assignments, K, C):
+    """
+    Zero out ``x`` and ``y`` on the **context** cluster that uses the same component
+    index as the **target** (the cluster whose linear expert matches the target expert).
+
+    For each batch row, finds cluster ``k`` with ``component_assignments[b, k*C] ==
+    component_assignments[b, -1]`` and sets ``xs, ys`` to zero on ``[k*C, (k+1)*C)``.
+
+    Returns cloned tensors (original ``xs, ys`` unchanged).
+    """
+    xs2 = xs.clone()
+    ys2 = ys.clone()
+    B = xs.shape[0]
+    ca = component_assignments.long()
+    for b in range(B):
+        tgt = ca[b, -1].item()
+        for k in range(K):
+            start = k * C
+            if ca[b, start].item() == tgt:
+                xs2[b, start : start + C] = 0
+                ys2[b, start : start + C] = 0
+                break
+    return xs2, ys2
 
 
 def _fit_w_per_batch(seg_x, seg_y, x_query, d, device):
