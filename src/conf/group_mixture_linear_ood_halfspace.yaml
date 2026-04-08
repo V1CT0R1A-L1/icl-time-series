@@ -10,10 +10,13 @@ inherit:
 training:
   # Must live here — NOT under task_kwargs. train.py loads state from
   #   {out_dir}/{resume_id}/state.pt  when resume is true.
-  resume: true
-  resume_id: b07e8f75-2ae3-4056-b0d1-d4ebd8461d21
-  # Optional: continue same Weights & Biases run (paste id from URL .../runs/<id>)
-  wandb_resume_id: dmkvk8ct
+  # resume: true
+  # resume_id: b07e8f75-2ae3-4056-b0d1-d4ebd8461d21
+  # # Optional: continue same Weights & Biases run (paste id from URL .../runs/<id>)
+  # wandb_resume_id: dmkvk8ct
+
+  # Clip global grad norm before optimizer.step(); reduces NaNs when curriculum ramps difficulty.
+  max_grad_norm: 1.0
 
   task_kwargs:
     n_components: 2

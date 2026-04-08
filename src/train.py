@@ -20,8 +20,21 @@ import wandb
 torch.backends.cudnn.benchmark = True
 
 
-def train_step(model, xs, ys, optimizer, loss_func, predict_inds=None, sequence_structure=None, loss_inds=None):
-    """loss_inds: optional list of indices into predict_inds to use for loss (e.g. exclude first-of-segment)."""
+def train_step(
+    model,
+    xs,
+    ys,
+    optimizer,
+    loss_func,
+    predict_inds=None,
+    sequence_structure=None,
+    loss_inds=None,
+    max_grad_norm=None,
+):
+    """loss_inds: optional list of indices into predict_inds to use for loss (e.g. exclude first-of-segment).
+
+    max_grad_norm: if set (e.g. 1.0), clip global gradient norm before optimizer.step() to reduce NaN blow-ups.
+    """
     optimizer.zero_grad()
     
     if predict_inds is None or len(predict_inds) == 0:
@@ -65,8 +78,15 @@ def train_step(model, xs, ys, optimizer, loss_func, predict_inds=None, sequence_
             f.write(json.dumps(log_entry) + '\n')
     except: pass
     # #endregion
-    
+
+    if not torch.isfinite(loss).all():
+        optimizer.zero_grad()
+        return float("nan"), output.detach()
+
     loss.backward()
+
+    if max_grad_norm is not None and float(max_grad_norm) > 0:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
     
     # #region agent log
     import os
@@ -387,9 +407,17 @@ def train(model, args, device):
             if len(loss_inds) == 0:
                 loss_inds = None  # fallback to all positions
 
+        max_gn = getattr(args.training, "max_grad_norm", None)
         loss, output = train_step(
-            model, xs.to(device), ys.to(device), optimizer, loss_func,
-            predict_inds, sequence_structure, loss_inds=loss_inds
+            model,
+            xs.to(device),
+            ys.to(device),
+            optimizer,
+            loss_func,
+            predict_inds,
+            sequence_structure,
+            loss_inds=loss_inds,
+            max_grad_norm=max_gn,
         )
 
         # Why loss ~1 when predicting one position: if targets are normalized (variance 1) and predictions ~0, MSE≈1.
@@ -625,6 +653,7 @@ def load_config(config_path):
             'resume_id': None,
             'wandb_resume_id': None,  # wandb run id (e.g. q251a116) to resume same run
             'resume_extra_steps': None,  # when resuming, train this many more steps (e.g. 5000)
+            'max_grad_norm': None,  # e.g. 1.0 to clip global grad norm; helps prevent NaN from exploding updates
         },
         'wandb': {
             'entity': None,
