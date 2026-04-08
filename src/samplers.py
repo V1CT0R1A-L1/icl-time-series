@@ -3,6 +3,19 @@ import math
 import torch
 
 
+def _truncated_standard_normal_nonneg_dim0(xs_b):
+    """
+    Replace the first feature with N(0, 1) truncated to [0, inf) (half-line), independent
+    of the other coordinates (which stay as sampled). Used for train-on-half-space experiments.
+
+    Sampling: U ~ Uniform(0.5, 1), X = Phi^{-1}(U) so X is standard normal conditioned on X >= 0.
+    """
+    out = xs_b.clone()
+    u = torch.rand_like(out[..., 0]) * 0.5 + 0.5
+    out[..., 0] = math.sqrt(2.0) * torch.erfinv(2 * u - 1)
+    return out
+
+
 class DataSampler:
     def __init__(self, n_dims):
         self.n_dims = n_dims
@@ -28,6 +41,13 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
     3. Predict the last target point using that component
     
     Total length = (K × C) + (T + 1)
+
+    **x distribution (robustness / OOD):** by default ``x_distribution_train`` is ``standard``
+    (iid Gaussian on all coordinates). Set ``ood_training: true`` or
+    ``x_distribution_train: truncated_half_space_dim0`` to train on **half-space** inputs:
+    the first coordinate follows N(0,1) truncated to ``[0, inf)``, other coordinates unchanged.
+    At evaluation, pass ``sample_xs(..., x_distribution_override='standard')`` for full-Gaussian
+    (out-of-training-support) batches.
     """
 
     def __init__(
@@ -51,6 +71,19 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         # When False (default): data ordered by clusters (cluster 0, cluster 1, ..., target cluster).
         # When True: shuffle only the K context clusters (0..K*C-1); target cluster (K*C..T-1) stays in order.
         self.shuffle_context_points = kwargs.pop('shuffle_context_points', False)
+
+        # x support for training: "standard" = full Gaussian (default); "truncated_half_space_dim0"
+        # = first coordinate from a half-space truncated Gaussian (see _truncated_standard_normal_nonneg_dim0).
+        # Set ``ood_training: true`` as shorthand for truncated_half_space_dim0, or set explicitly.
+        self.x_distribution_train = kwargs.pop("x_distribution_train", None)
+        ood_training = kwargs.pop("ood_training", False)
+        if self.x_distribution_train is None:
+            self.x_distribution_train = "truncated_half_space_dim0" if ood_training else "standard"
+        if self.x_distribution_train not in ("standard", "truncated_half_space_dim0"):
+            raise ValueError(
+                "x_distribution_train must be 'standard' or 'truncated_half_space_dim0' "
+                f"(got {self.x_distribution_train!r})"
+            )
 
         # Base sampler for xs (just Gaussian)
         filtered_kwargs = {}
@@ -96,10 +129,22 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         # Optional fixed assignments for eval (e.g. context clusters = [0,1], target = 0 or 1)
         fixed_cluster_assignments = kwargs.pop("fixed_cluster_assignments", None)  # (K,) or (B, K)
         fixed_target_component = kwargs.pop("fixed_target_component", None)  # scalar or (B,)
+        # Override train x distribution for this batch only: e.g. "standard" for full-Gaussian OOD eval
+        # while the sampler was constructed with truncated_half_space_dim0 for training.
+        x_distribution_override = kwargs.pop("x_distribution_override", None)
 
         xs_b = self.base_sampler.sample_xs(
             n_points, b_size, n_dims_truncated=n_dims_truncated, seeds=seeds
         )  # (B, T, d)
+
+        mode = x_distribution_override if x_distribution_override is not None else self.x_distribution_train
+        if mode == "truncated_half_space_dim0":
+            xs_b = _truncated_standard_normal_nonneg_dim0(xs_b)
+        elif mode != "standard":
+            raise ValueError(
+                "x_distribution_override / x_distribution_train must be 'standard' or "
+                f"'truncated_half_space_dim0' (got {mode!r})"
+            )
 
         B, T, d = xs_b.shape
         K = self.n_components

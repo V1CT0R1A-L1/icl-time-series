@@ -1,0 +1,19 @@
+# K=2 mixtures + same curriculum as group_mixture_linear.yaml, but train with x_0 >= 0 (truncated Gaussian on dim 0).
+# Does NOT inherit test_two_components — uses the main group_mixture_linear recipe.
+#
+# Eval (full-Gaussian / OOD x): call sample_xs(..., x_distribution_override="standard").
+inherit:
+  - group_mixture_linear.yaml
+
+training:
+  task_kwargs:
+    n_components: 2
+    ood_training: true
+    # x_distribution_train: truncated_half_space_dim0   # explicit alternative to ood_training: true
+    # target_cluster_context_points: 6   # override if you want a different T than group_mixture_linear.yaml
+
+out_dir: ../models/group_mixture_linear
+
+
+wandb:
+  name: "group_mixture_linear_ood_halfspace"
