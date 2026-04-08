@@ -39,8 +39,8 @@ training:
       inc: 1
       interval: 5000
     points:
-      start: 8
-      end: 8
+      start: 3
+      end: 10
       inc: 1
       interval: 5000
 
