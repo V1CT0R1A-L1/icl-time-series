@@ -8,12 +8,16 @@ inherit:
   - group_mixture_linear.yaml
 
 training:
+  # Must live here — NOT under task_kwargs. train.py loads state from
+  #   {out_dir}/{resume_id}/state.pt  when resume is true.
+  resume: true
+  resume_id: b07e8f75-2ae3-4056-b0d1-d4ebd8461d21
+  # Optional: continue same Weights & Biases run (paste id from URL .../runs/<id>)
+  wandb_resume_id: dmkvk8ct
+
   task_kwargs:
     n_components: 2
     ood_training: true
-    resume: true
-    resume_id: "b07e8f75-2ae3-4056-b0d1-d4ebd8461d21"
-
     # x_distribution_train: truncated_half_space_dim0   # explicit alternative to ood_training: true
     # target_cluster_context_points: 6   # override if you want a different T than group_mixture_linear.yaml
 
@@ -22,4 +26,3 @@ out_dir: ../models/group_mixture_linear
 
 wandb:
   name: "group_mixture_linear_ood_halfspace"
-  wandb_resume_id: dmkvk8ct
