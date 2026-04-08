@@ -3,6 +3,8 @@
 #
 # Eval (full-Gaussian / OOD x): call sample_xs(..., x_distribution_override="standard").
 inherit:
+  - models/standard.yaml
+  - wandb.yaml
   - group_mixture_linear.yaml
 
 training:
