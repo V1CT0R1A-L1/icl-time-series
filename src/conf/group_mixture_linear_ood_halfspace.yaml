@@ -19,7 +19,7 @@ training:
   max_grad_norm: 1.0
 
   task_kwargs:
-    n_components: 2
+    n_components: 3
     ood_training: true
     # x_distribution_train: truncated_half_space_dim0   # explicit alternative to ood_training: true
     # target_cluster_context_points: 6   # override if you want a different T than group_mixture_linear.yaml
