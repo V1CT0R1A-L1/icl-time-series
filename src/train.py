@@ -137,6 +137,9 @@ def train(model, args, device):
     starting_step = 0
     state_path = os.path.join(args.out_dir, "state.pt")
     resume_if_exists = getattr(args.training, "resume", False)
+    init_from_run_id = getattr(args.training, "init_from_run_id", None)
+    init_from_step = getattr(args.training, "init_from_step", -1)
+    init_reset_optimizer = getattr(args.training, "init_reset_optimizer", True)
     if resume_if_exists and os.path.exists(state_path):
         state = torch.load(state_path)
         model.load_state_dict(state["model_state_dict"])
@@ -145,6 +148,50 @@ def train(model, args, device):
         for i in range(state["train_step"] + 1):
             curriculum.update()
         print(f"Resumed from step {starting_step} (state.pt)")
+    elif init_from_run_id:
+        run_parent_dir = os.path.dirname(args.out_dir)
+        source_run_dir = os.path.join(run_parent_dir, init_from_run_id)
+        if not os.path.exists(source_run_dir):
+            raise FileNotFoundError(
+                f"init_from_run_id directory not found: {source_run_dir}"
+            )
+
+        if init_from_step is None or int(init_from_step) < 0:
+            source_state_path = os.path.join(source_run_dir, "state.pt")
+            if not os.path.exists(source_state_path):
+                raise FileNotFoundError(f"Source state not found: {source_state_path}")
+            source_state = torch.load(source_state_path)
+            model.load_state_dict(source_state["model_state_dict"])
+            if not init_reset_optimizer and "optimizer_state_dict" in source_state:
+                optimizer.load_state_dict(source_state["optimizer_state_dict"])
+            print(
+                f"Initialized model from {source_state_path} "
+                f"(optimizer reset={init_reset_optimizer})"
+            )
+        else:
+            step = int(init_from_step)
+            source_state_path = os.path.join(source_run_dir, f"state_{step}.pt")
+            source_model_path = os.path.join(source_run_dir, f"model_{step}.pt")
+            if os.path.exists(source_state_path):
+                source_state = torch.load(source_state_path)
+                model.load_state_dict(source_state["model_state_dict"])
+                if not init_reset_optimizer and "optimizer_state_dict" in source_state:
+                    optimizer.load_state_dict(source_state["optimizer_state_dict"])
+                print(
+                    f"Initialized model from {source_state_path} "
+                    f"(optimizer reset={init_reset_optimizer})"
+                )
+            elif os.path.exists(source_model_path):
+                model_state = torch.load(source_model_path)
+                model.load_state_dict(model_state)
+                print(
+                    f"Initialized model from {source_model_path} "
+                    "(optimizer reset=True; no optimizer state in model checkpoint)"
+                )
+            else:
+                raise FileNotFoundError(
+                    f"Could not find either {source_state_path} or {source_model_path}"
+                )
     elif not resume_if_exists and os.path.exists(state_path):
         print("resume: false — ignoring existing state.pt, starting from step 0")
 
@@ -197,6 +244,7 @@ def train(model, args, device):
     else:
         end_step = args.training.train_steps
     pbar = tqdm(range(starting_step, end_step))
+    save_at_steps = set(getattr(args.training, "save_at_steps", []) or [])
 
     num_training_examples = args.training.num_training_examples
 
@@ -552,6 +600,14 @@ def train(model, args, device):
             }
             torch.save(training_state, state_path)
 
+        if i in save_at_steps and not args.test_run:
+            training_state = {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "train_step": i,
+            }
+            torch.save(training_state, os.path.join(args.out_dir, f"state_{i}.pt"))
+
         if (
             args.training.keep_every_steps > 0
             and i % args.training.keep_every_steps == 0
@@ -654,6 +710,10 @@ def load_config(config_path):
             'wandb_resume_id': None,  # wandb run id (e.g. q251a116) to resume same run
             'resume_extra_steps': None,  # when resuming, train this many more steps (e.g. 5000)
             'max_grad_norm': None,  # e.g. 1.0 to clip global grad norm; helps prevent NaN from exploding updates
+            'init_from_run_id': None,  # initialize model weights from another run dir, but save into a new run dir
+            'init_from_step': -1,  # -1 => source state.pt, else source state_{step}.pt / model_{step}.pt
+            'init_reset_optimizer': True,  # True for standard finetuning from pretrained weights
+            'save_at_steps': [],  # extra checkpoints at exact steps: saves state_{step}.pt
         },
         'wandb': {
             'entity': None,

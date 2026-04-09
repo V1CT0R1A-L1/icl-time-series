@@ -1,0 +1,69 @@
+# Fine-tuning adaptation experiment:
+# - Loads model weights from a source run (init_from_run_id)
+# - Writes all checkpoints to a NEW run directory (never overwrites source run state.pt)
+# - Trains on a strictly out-of-source-support x distribution (x[...,0] <= 0)
+#
+# Usage:
+#   python train.py --config conf/group_mixture_linear_finetune_adapt.yaml
+#
+# Then evaluate adaptation checkpoints with eval.py/eval.ipynb using step in:
+#   [0, 10, 50, 100, 300, 1000]
+inherit:
+  - models/standard.yaml
+  - wandb.yaml
+  - group_mixture_linear.yaml
+
+training:
+  # Do NOT resume in-place. This run gets a fresh run_id and new output folder.
+  resume: false
+
+  # Source run to initialize from (read-only source). Replace with your base run id.
+  init_from_run_id: "e7b6fd5d-ee98-48e4-9a61-109b44b2b352"
+  # -1 => load source state.pt, otherwise load source state_<step>.pt / model_<step>.pt
+  init_from_step: -1
+  # True = reset optimizer for cleaner adaptation-speed measurement
+  init_reset_optimizer: true
+
+  # Adaptation budget
+  train_steps: 1001
+  learning_rate: 0.0001
+  lr_warmup_steps: 50
+  max_grad_norm: 1.0
+
+  # Keep task/curriculum fixed at full difficulty during adaptation.
+  curriculum:
+    dims:
+      start: 5
+      end: 5
+      inc: 1
+      interval: 1000000
+    points:
+      start: 10
+      end: 10
+      inc: 1
+      interval: 1000000
+
+  # Save main state often (in THIS new run dir only)
+  save_every_steps: 10
+  keep_every_steps: 0
+  # Explicit adaptation checkpoints
+  save_at_steps: [0, 10, 50, 100, 300, 1000]
+
+  task_kwargs:
+    n_components: 3
+    target_cluster_context_points: 10
+    noise_std: 0.0
+    scale: 0.5
+    normalize_ys: false
+    predict_target_only: false
+    shuffle_context_points: false
+
+    # Train on complement half-space to test adaptation to unseen support.
+    # Source OOD training used x[...,0] >= 0 (truncated_half_space_dim0).
+    # This adaptation run uses x[...,0] <= 0.
+    x_distribution_train: truncated_half_space_dim0_nonpos
+
+out_dir: ../models/group_mixture_linear
+
+wandb:
+  name: "group_mixture_linear_finetune_adapt"

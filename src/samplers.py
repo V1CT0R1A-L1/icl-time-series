@@ -16,6 +16,19 @@ def _truncated_standard_normal_nonneg_dim0(xs_b):
     return out
 
 
+def _truncated_standard_normal_nonpos_dim0(xs_b):
+    """
+    Replace the first feature with N(0, 1) truncated to (-inf, 0] (complement half-line),
+    independent of other coordinates.
+
+    Sampling: U ~ Uniform(0, 0.5), X = Phi^{-1}(U).
+    """
+    out = xs_b.clone()
+    u = torch.rand_like(out[..., 0]) * 0.5
+    out[..., 0] = math.sqrt(2.0) * torch.erfinv(2 * u - 1)
+    return out
+
+
 class DataSampler:
     def __init__(self, n_dims):
         self.n_dims = n_dims
@@ -79,9 +92,14 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         ood_training = kwargs.pop("ood_training", False)
         if self.x_distribution_train is None:
             self.x_distribution_train = "truncated_half_space_dim0" if ood_training else "standard"
-        if self.x_distribution_train not in ("standard", "truncated_half_space_dim0"):
+        if self.x_distribution_train not in (
+            "standard",
+            "truncated_half_space_dim0",
+            "truncated_half_space_dim0_nonpos",
+        ):
             raise ValueError(
-                "x_distribution_train must be 'standard' or 'truncated_half_space_dim0' "
+                "x_distribution_train must be one of "
+                "('standard', 'truncated_half_space_dim0', 'truncated_half_space_dim0_nonpos') "
                 f"(got {self.x_distribution_train!r})"
             )
 
@@ -140,10 +158,13 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         mode = x_distribution_override if x_distribution_override is not None else self.x_distribution_train
         if mode == "truncated_half_space_dim0":
             xs_b = _truncated_standard_normal_nonneg_dim0(xs_b)
+        elif mode == "truncated_half_space_dim0_nonpos":
+            xs_b = _truncated_standard_normal_nonpos_dim0(xs_b)
         elif mode != "standard":
             raise ValueError(
-                "x_distribution_override / x_distribution_train must be 'standard' or "
-                f"'truncated_half_space_dim0' (got {mode!r})"
+                "x_distribution_override / x_distribution_train must be one of "
+                "('standard', 'truncated_half_space_dim0', 'truncated_half_space_dim0_nonpos') "
+                f"(got {mode!r})"
             )
 
         B, T, d = xs_b.shape
