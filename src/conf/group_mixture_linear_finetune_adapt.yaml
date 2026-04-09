@@ -50,7 +50,7 @@ training:
   save_at_steps: [0, 10, 50, 100, 300, 1000]
 
   task_kwargs:
-    n_components: 3
+    n_components: 2
     target_cluster_context_points: 10
     noise_std: 0.0
     scale: 0.5
