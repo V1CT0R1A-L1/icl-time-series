@@ -29,8 +29,17 @@ def get_model_from_run(run_path, step=-1, only_conf=False):
         model.load_state_dict(state["model_state_dict"], strict=False)
     else:
         model_path = os.path.join(run_path, f"model_{step}.pt")
-        state_dict = torch.load(model_path, map_location='cpu')
-        model.load_state_dict(state_dict)
+        state_step_path = os.path.join(run_path, f"state_{step}.pt")
+        if os.path.isfile(model_path):
+            state_dict = torch.load(model_path, map_location='cpu')
+            model.load_state_dict(state_dict)
+        elif os.path.isfile(state_step_path):
+            state = torch.load(state_step_path, map_location='cpu')
+            model.load_state_dict(state["model_state_dict"], strict=False)
+        else:
+            raise FileNotFoundError(
+                f"Checkpoint for step {step} not found: expected {model_path} or {state_step_path}"
+            )
 
     return model, conf
 
