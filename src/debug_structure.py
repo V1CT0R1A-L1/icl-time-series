@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# [USELESS for core train/eval] Prints sequence_structure fields once; not imported by train/eval.
 import sys
 sys.path.append('src')
 

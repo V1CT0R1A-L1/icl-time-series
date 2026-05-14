@@ -1,4 +1,6 @@
 """
+[USELESS for core train/eval] Helper to launch a *short* training run for meeting / plot scaffolding.
+Not used by `train.py` with your paper configs; safe to ignore for publication.
 Quick training script to generate data for meeting plots.
 Runs a short training session with minimal configuration.
 """

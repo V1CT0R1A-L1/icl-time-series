@@ -10,6 +10,7 @@ from sklearn import tree
 
 from base_models import NeuralNetwork, ParallelNetworks
 
+# Publication note: "[USELESS …]" tags commented-out debug / Cursor agent logging kept for reference only.
 
 def build_model(conf):
     if conf.family == "gpt2":
@@ -303,11 +304,11 @@ class TransformerModel(nn.Module):
             # Causal masking: for each position i, mask only y[i], but allow y[0:i] to be visible
             # Since attention is already causal, we just mask the current positions
             ys_input[:, inds] = 0.0
-            # Diagnostic: verify masking worked (only print once)
-            if not hasattr(self, '_masking_verified'):
-                print(f"MODEL DEBUG: Masked {len(inds)} positions. ys_input at masked pos: {ys_input[0, inds[0]].item():.6f}")
-                print(f"MODEL DEBUG: Original ys at masked pos: {ys[0, inds[0]].item():.6f}")
-                self._masking_verified = True
+            # [USELESS] One-time stdout from development; does not affect forward math.
+            # if not hasattr(self, '_masking_verified'):
+            #     print(f"MODEL DEBUG: Masked {len(inds)} positions. ys_input at masked pos: {ys_input[0, inds[0]].item():.6f}")
+            #     print(f"MODEL DEBUG: Original ys at masked pos: {ys[0, inds[0]].item():.6f}")
+            #     self._masking_verified = True
 
         # One-token-per-(x,y) format when predicting only the last position: T tokens, each [x_i; y_i], last is [x_query; 0].
         # Standard ICL layout; often easier for the model to learn than interleaved (x0,y0,x1,y1,...).
@@ -328,48 +329,49 @@ class TransformerModel(nn.Module):
         type_ids = torch.arange(seq_len, device=embeds.device) % 2
         embeds = embeds + self.token_type_embedding(type_ids).unsqueeze(0)
 
+        # [USELESS — Cursor/agent JSON logging to .cursor/debug.log; not part of model math.]
         # #region agent log
-        import json
-        import os
-        try:
-            os.makedirs('.cursor', exist_ok=True)
-            log_path = os.path.join('.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                target_idx_in_ys = inds[0].item() if len(inds) > 0 else -1
-                target_idx_in_zs = target_idx_in_ys * 2 + 1 if target_idx_in_ys >= 0 else -1
-                context_y_idx = 1  # First y position (y0)
-                log_entry = {
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "E",
-                    "location": "models.py:226",
-                    "message": "Input sequence values",
-                    "data": {
-                        "ys_input_shape": list(ys_input.shape),
-                        "ys_input_context": ys_input[0, :target_idx_in_ys].cpu().tolist() if target_idx_in_ys > 0 else [],
-                        "ys_input_target": ys_input[0, target_idx_in_ys].item() if target_idx_in_ys >= 0 else 0.0,
-                        "zs_target_pos": zs[0, target_idx_in_zs, :5].cpu().tolist() if target_idx_in_zs >= 0 and target_idx_in_zs < zs.shape[1] else [],
-                        "zs_context_y_pos": zs[0, context_y_idx, :5].cpu().tolist() if zs.shape[1] > context_y_idx else []
-                    },
-                    "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-                }
-                f.write(json.dumps(log_entry) + '\n')
-        except: pass
+        # import json
+        # import os
+        # try:
+        #     os.makedirs('.cursor', exist_ok=True)
+        #     log_path = os.path.join('.cursor', 'debug.log')
+        #     with open(log_path, 'a', encoding='utf-8') as f:
+        #         target_idx_in_ys = inds[0].item() if len(inds) > 0 else -1
+        #         target_idx_in_zs = target_idx_in_ys * 2 + 1 if target_idx_in_ys >= 0 else -1
+        #         context_y_idx = 1  # First y position (y0)
+        #         log_entry = {
+        #             "sessionId": "debug-session",
+        #             "runId": "run1",
+        #             "hypothesisId": "E",
+        #             "location": "models.py:226",
+        #             "message": "Input sequence values",
+        #             "data": {
+        #                 "ys_input_shape": list(ys_input.shape),
+        #                 "ys_input_context": ys_input[0, :target_idx_in_ys].cpu().tolist() if target_idx_in_ys > 0 else [],
+        #                 "ys_input_target": ys_input[0, target_idx_in_ys].item() if target_idx_in_ys >= 0 else 0.0,
+        #                 "zs_target_pos": zs[0, target_idx_in_zs, :5].cpu().tolist() if target_idx_in_zs >= 0 and target_idx_in_zs < zs.shape[1] else [],
+        #                 "zs_context_y_pos": zs[0, context_y_idx, :5].cpu().tolist() if zs.shape[1] > context_y_idx else []
+        #             },
+        #             "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+        #         }
+        #         f.write(json.dumps(log_entry) + '\n')
+        # except: pass
         # #endregion
         
-        # Diagnostic: show what the model sees (only once)
-        if not hasattr(self, '_sequence_verified'):
-            print(f"\nMODEL SEQUENCE DEBUG:")
-            print(f"  xs shape: {xs.shape}, ys_input shape: {ys_input.shape}")
-            print(f"  After _combine, zs shape: {zs.shape}")
-            print(f"  zs[0, :4, :3] (first 4 positions, first 3 dims): {zs[0, :4, :3].cpu().numpy()}")
-            print(f"  For point 0: zs[0, 0] should be x0, zs[0, 1] should be [y0, 0, 0, ...]")
-            if len(inds) > 0:
-                target_idx_in_ys = inds[0].item()
-                target_idx_in_zs = target_idx_in_ys * 2 + 1  # y positions are at odd indices
-                print(f"  Target is at ys index {target_idx_in_ys}, which is zs position {target_idx_in_zs}")
-                print(f"  zs[0, {target_idx_in_zs}] (target y position, should be masked): {zs[0, target_idx_in_zs, :3].cpu().numpy()}")
-            self._sequence_verified = True
+        # [USELESS] One-time MODEL SEQUENCE DEBUG prints to stdout.
+        # if not hasattr(self, '_sequence_verified'):
+        #     print(f"\nMODEL SEQUENCE DEBUG:")
+        #     print(f"  xs shape: {xs.shape}, ys_input shape: {ys_input.shape}")
+        #     print(f"  After _combine, zs shape: {zs.shape}")
+        #     print(f"  zs[0, :4, :3] (first 4 positions, first 3 dims): {zs[0, :4, :3].cpu().numpy()}")
+        #     print(f"  For point 0: zs[0, 0] should be x0, zs[0, 1] should be [y0, 0, 0, ...]")
+        #     if len(inds) > 0:
+        #         target_idx_in_ys = inds[0].item()
+        #         target_idx_in_zs = target_idx_in_ys * 2 + 1  # y positions are at odd indices
+        #         print(f"  Target is at ys index {target_idx_in_ys}, which is zs position {target_idx_in_zs}")
+        #         print(f"  zs[0, {target_idx_in_zs}] (target y position, should be masked): {zs[0, target_idx_in_zs, :3].cpu().numpy()}")
+        #     self._sequence_verified = True
         
         if sequence_structure is not None:
             embeds = self._add_special_token_embeddings(embeds, sequence_structure)
@@ -377,68 +379,70 @@ class TransformerModel(nn.Module):
         output = self._backbone(inputs_embeds=embeds).last_hidden_state
         prediction = self._read_out(output)
         
-        # Diagnostic: verify prediction extraction
-        if not hasattr(self, '_prediction_verified'):
-            x_pos_pred = prediction[:, 0::2, 0]  # predict y_i from representation at x_i (token 2i)
-            print(f"\nMODEL PREDICTION DEBUG:")
-            print(f"  output shape: {output.shape}")
-            print(f"  prediction shape (before indexing): {prediction.shape}")
-            print(f"  prediction[:, 0::2, 0] extracts x positions (predict y_i from x_i), shape: {x_pos_pred.shape}")
-            print(f"  inds: {inds}")
-            print(f"  Final output shape: {x_pos_pred[:, inds].shape}")
-            self._prediction_verified = True
+        # [USELESS] One-time MODEL PREDICTION DEBUG prints to stdout.
+        # if not hasattr(self, '_prediction_verified'):
+        #     x_pos_pred = prediction[:, 0::2, 0]  # predict y_i from representation at x_i (token 2i)
+        #     print(f"\nMODEL PREDICTION DEBUG:")
+        #     print(f"  output shape: {output.shape}")
+        #     print(f"  prediction shape (before indexing): {prediction.shape}")
+        #     print(f"  prediction[:, 0::2, 0] extracts x positions (predict y_i from x_i), shape: {x_pos_pred.shape}")
+        #     print(f"  inds: {inds}")
+        #     print(f"  Final output shape: {x_pos_pred[:, inds].shape}")
+        #     self._prediction_verified = True
         
+        # [USELESS — Cursor/agent JSON logging.]
         # #region agent log
-        import json
-        import os
-        try:
-            os.makedirs('.cursor', exist_ok=True)
-            log_path = os.path.join('.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                x_positions = prediction[:, 0::2, 0]
-                final_output = x_positions[:, inds]
-                log_entry = {
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "B",
-                    "location": "models.py:259",
-                    "message": "Prediction extraction values",
-                    "data": {
-                        "prediction_shape": list(prediction.shape),
-                        "x_positions_shape": list(x_positions.shape),
-                        "inds": inds.cpu().tolist() if hasattr(inds, 'cpu') else inds,
-                        "final_output_shape": list(final_output.shape),
-                        "final_output_sample": final_output[0, :3].cpu().tolist() if final_output.shape[1] >= 3 else final_output[0].cpu().tolist(),
-                        "x_positions_sample": x_positions[0, :5].cpu().tolist()
-                    },
-                    "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-                }
-                f.write(json.dumps(log_entry) + '\n')
-        except: pass
+        # import json
+        # import os
+        # try:
+        #     os.makedirs('.cursor', exist_ok=True)
+        #     log_path = os.path.join('.cursor', 'debug.log')
+        #     with open(log_path, 'a', encoding='utf-8') as f:
+        #         x_positions = prediction[:, 0::2, 0]
+        #         final_output = x_positions[:, inds]
+        #         log_entry = {
+        #             "sessionId": "debug-session",
+        #             "runId": "run1",
+        #             "hypothesisId": "B",
+        #             "location": "models.py:259",
+        #             "message": "Prediction extraction values",
+        #             "data": {
+        #                 "prediction_shape": list(prediction.shape),
+        #                 "x_positions_shape": list(x_positions.shape),
+        #                 "inds": inds.cpu().tolist() if hasattr(inds, 'cpu') else inds,
+        #                 "final_output_shape": list(final_output.shape),
+        #                 "final_output_sample": final_output[0, :3].cpu().tolist() if final_output.shape[1] >= 3 else final_output[0].cpu().tolist(),
+        #                 "x_positions_sample": x_positions[0, :5].cpu().tolist()
+        #             },
+        #             "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+        #         }
+        #         f.write(json.dumps(log_entry) + '\n')
+        # except: pass
         # #endregion
         
+        # [USELESS — Cursor/agent JSON logging.]
         # #region agent log
-        import os
-        try:
-            os.makedirs('.cursor', exist_ok=True)
-            log_path = os.path.join('.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                log_entry = {
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "A",
-                    "location": "models.py:259",
-                    "message": "Embedding values at target position",
-                    "data": {
-                        "embeds_shape": list(embeds.shape),
-                        "target_zs_idx": (inds[0].item() * 2 + 1) if len(inds) > 0 else -1,
-                        "embeds_at_target_sample": embeds[0, (inds[0].item() * 2 + 1) if len(inds) > 0 else 0, :5].cpu().tolist(),
-                        "embeds_context_sample": embeds[0, 1, :5].cpu().tolist() if embeds.shape[1] > 1 else []
-                    },
-                    "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-                }
-                f.write(json.dumps(log_entry) + '\n')
-        except: pass
+        # import os
+        # try:
+        #     os.makedirs('.cursor', exist_ok=True)
+        #     log_path = os.path.join('.cursor', 'debug.log')
+        #     with open(log_path, 'a', encoding='utf-8') as f:
+        #         log_entry = {
+        #             "sessionId": "debug-session",
+        #             "runId": "run1",
+        #             "hypothesisId": "A",
+        #             "location": "models.py:259",
+        #             "message": "Embedding values at target position",
+        #             "data": {
+        #                 "embeds_shape": list(embeds.shape),
+        #                 "target_zs_idx": (inds[0].item() * 2 + 1) if len(inds) > 0 else -1,
+        #                 "embeds_at_target_sample": embeds[0, (inds[0].item() * 2 + 1) if len(inds) > 0 else 0, :5].cpu().tolist(),
+        #                 "embeds_context_sample": embeds[0, 1, :5].cpu().tolist() if embeds.shape[1] > 1 else []
+        #             },
+        #             "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
+        #         }
+        #         f.write(json.dumps(log_entry) + '\n')
+        # except: pass
         # #endregion
         
         # Predict y_i from representation at x_i (token 2i), not at y_i (token 2i+1).
@@ -604,7 +608,8 @@ class LassoModel:
                         try:
                             clf.fit(train_xs, train_ys)
                         except Warning:
-                            print(f"lasso convergence warning at i={i}, j={j}.")
+                            # [USELESS] Console noise; failure is already signaled by re-raising.
+                            # print(f"lasso convergence warning at i={i}, j={j}.")
                             raise
 
                     w_pred = torch.from_numpy(clf.coef_).unsqueeze(1)

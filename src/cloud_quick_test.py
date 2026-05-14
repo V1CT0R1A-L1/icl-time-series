@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Quick test to run on the cloud to verify everything works
+[USELESS for core train/eval] Quick import / CUDA smoke test for cloud images.
+Not imported by `train.py` or `eval.py`.
 """
 import sys
 import os

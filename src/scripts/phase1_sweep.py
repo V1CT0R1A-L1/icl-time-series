@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+[USELESS for core train/eval] Batch config generator / launcher for a specific scaling sweep.
 Phase 1: Component Count Scaling Experiment
 Sweeps over K (number of components) and generates configs/runs experiments.
 

@@ -1,3 +1,5 @@
+# [USELESS for publication pipeline] Standalone sampler sanity script (Chinese comments / prints).
+# Not imported by train.py or eval.py. Run manually if you need batch independence checks.
 # test_data_independence.py
 import torch
 import sys

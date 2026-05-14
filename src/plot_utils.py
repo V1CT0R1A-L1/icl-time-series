@@ -79,7 +79,8 @@ def collect_results(run_dir, df, valid_row=None, rename_eval=None, rename_model=
         run_path = os.path.join(run_dir, r.task, r.run_id)
         _, conf = get_model_from_run(run_path, only_conf=True)
 
-        print(r.run_name, r.run_id)
+        # [USELESS] Noisy when batch-collecting many runs; enable locally if you need run_id trace.
+        # print(r.run_name, r.run_id)
         metrics = get_run_metrics(run_path, skip_model_load=True)
 
         for eval_name, results in sorted(metrics.items()):

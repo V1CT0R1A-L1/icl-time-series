@@ -53,32 +53,6 @@ def train_step(
         else:
             loss = loss_func(output, ys[:, predict_inds])
     
-    # #region agent log
-    import json
-    import os
-    try:
-        os.makedirs('.cursor', exist_ok=True)
-        log_path = os.path.join('.cursor', 'debug.log')
-        with open(log_path, 'a', encoding='utf-8') as f:
-            log_entry = {
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "C",
-                "location": "train.py:33",
-                "message": "Loss computation values",
-                "data": {
-                    "output_shape": list(output.shape),
-                    "output_sample": output[0, :3].cpu().tolist() if output.shape[1] >= 3 else output[0].cpu().tolist(),
-                    "target_shape": list(ys[:, predict_inds].shape) if predict_inds is not None else list(ys.shape),
-                    "target_sample": ys[0, predict_inds[:3]].cpu().tolist() if predict_inds is not None and len(predict_inds) >= 3 else (ys[0, :3].cpu().tolist() if predict_inds is None else ys[0, predict_inds].cpu().tolist()),
-                    "loss_value": loss.item()
-                },
-                "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-            }
-            f.write(json.dumps(log_entry) + '\n')
-    except: pass
-    # #endregion
-
     if not torch.isfinite(loss).all():
         optimizer.zero_grad()
         return float("nan"), output.detach()
@@ -87,38 +61,6 @@ def train_step(
 
     if max_grad_norm is not None and float(max_grad_norm) > 0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
-    
-    # #region agent log
-    import os
-    try:
-        log_path = os.path.join('.cursor', 'debug.log')
-        with open(log_path, 'a', encoding='utf-8') as f:
-            grad_norms = {}
-            total_norm = 0.0
-            for name, param in model.named_parameters():
-                if param.grad is not None:
-                    param_norm = param.grad.data.norm(2)
-                    total_norm += param_norm.item() ** 2
-                    grad_norms[name] = param_norm.item()
-            total_norm = total_norm ** (1. / 2)
-            
-            log_entry = {
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "D",
-                "location": "train.py:35",
-                "message": "Gradient norms after backward",
-                "data": {
-                    "total_grad_norm": total_norm,
-                    "grad_norms_sample": dict(list(grad_norms.items())[:5]),
-                    "num_params_with_grad": len([p for p in model.parameters() if p.grad is not None]),
-                    "num_params_total": len(list(model.parameters()))
-                },
-                "timestamp": int(torch.cuda.current_device() * 1000) if torch.cuda.is_available() else 0
-            }
-            f.write(json.dumps(log_entry) + '\n')
-    except: pass
-    # #endregion
     
     optimizer.step()
     return loss.detach().item(), output.detach()
@@ -352,74 +294,6 @@ def train(model, args, device):
             )
             ys = task.evaluate(xs)
             
-            # Diagnostic prints for first batch
-            if i == 0:
-                print("\n" + "="*60)
-                print("DIAGNOSTIC: First batch data structure (Redesigned ICL)")
-                print("="*60)
-                print(f"xs shape: {xs.shape}")
-                print(f"ys shape: {ys.shape}")
-                K = data_sampler.n_components
-                C = data_sampler.contexts_per_component
-                T_target = data_sampler.target_cluster_context_points
-                total_context = K * C
-                target_start = total_context
-                target_context_end = target_start + T_target
-                predict_idx = predict_inds[0] if predict_inds is not None and len(predict_inds) > 0 else -1
-                
-                print(f"\nStructure: {K} context clusters × {C} points + target cluster ({T_target} context + 1 prediction)")
-                print(f"Component assignments (first example): {data_sampler.component_assignments[0].cpu().tolist()}")
-                if hasattr(data_sampler, 'cluster_assignments'):
-                    print(f"Cluster assignments (which component each cluster uses): {data_sampler.cluster_assignments[0].cpu().tolist()}")
-                print(f"Target component (first example): {data_sampler.target_components[0].item()}")
-                
-                # Show context clusters with component weights
-                print(f"\nContext clusters (first example):")
-                components = data_sampler.current_components[0]  # (K, d, 1)
-                for cluster_idx in range(K):
-                    cluster_start = cluster_idx * C
-                    cluster_end = cluster_start + C
-                    cluster_comp = data_sampler.component_assignments[0, cluster_start].item()
-                    cluster_ys = ys[0, cluster_start:cluster_end].cpu().numpy()
-                    cluster_xs = xs[0, cluster_start:cluster_end, :5].cpu().numpy()  # First 5 dims
-                    cluster_w = components[cluster_comp, :5, 0].cpu().numpy()  # First 5 dims of weight
-                    print(f"  Cluster {cluster_idx}: uses component {cluster_comp}")
-                    print(f"    Weight vector (first 5 dims): {cluster_w}")
-                    print(f"    xs (first 5 dims): {cluster_xs}")
-                    print(f"    ys: {cluster_ys}")
-                    # Verify: y should be approximately x^T w * scale
-                    # Note: components are already scaled, and task.evaluate() applies scale again
-                    manual_ys = (xs[0, cluster_start:cluster_end] @ components[cluster_comp]).squeeze().cpu().numpy() * task.scale
-                    print(f"    Manual y = (x^T w) * scale: {manual_ys}")
-                    print(f"    Difference: {np.abs(cluster_ys - manual_ys)}")
-                
-                # Show target cluster
-                print(f"\nTarget cluster (first example):")
-                target_comp = data_sampler.target_components[0].item()
-                target_context_ys = ys[0, target_start:target_context_end].cpu().numpy()
-                target_pred_y = ys[0, predict_idx].item()
-                target_context_xs = xs[0, target_start:target_context_end, :5].cpu().numpy()
-                target_w = components[target_comp, :5, 0].cpu().numpy()
-                target_pred_x = xs[0, predict_idx, :5].cpu().numpy()
-                print(f"  Uses component {target_comp}")
-                print(f"  Weight vector (first 5 dims): {target_w}")
-                print(f"  Context xs (first 5 dims): {target_context_xs}")
-                print(f"  Context ys: {target_context_ys}")
-                print(f"  Prediction x (first 5 dims): {target_pred_x}")
-                print(f"  Prediction y (to predict): {target_pred_y:.3f}")
-                manual_pred = (xs[0, predict_idx:predict_idx+1] @ components[target_comp]).squeeze().item() * task.scale
-                print(f"  Manual prediction = (x^T w) * scale: {manual_pred:.3f}")
-                
-                print(f"\nFirst example xs (first 3 points):")
-                print(xs[0, :3, :5].cpu().numpy())  # First 3 points, first 5 dims
-                print(f"\nFirst example ys (all points):")
-                print(ys[0, :].cpu().numpy())
-                print(f"ys stats: min={ys.min().item():.3f}, max={ys.max().item():.3f}, mean={ys.mean().item():.3f}, std={ys.std().item():.3f}")
-                print(f"\nModel should:")
-                print(f"  1. Learn components from context clusters")
-                print(f"  2. Infer component {target_comp} from target cluster's context points")
-                print(f"  3. Predict target point using component {target_comp}")
-                print("="*60 + "\n")
         elif args.training.task == "ar_warmup" and hasattr(data_sampler, 'current_ys'):
             task = task_sampler(**task_sampler_args)
             ys = data_sampler.current_ys
@@ -434,10 +308,6 @@ def train(model, args, device):
             ys_mean = ys.mean(dim=1, keepdim=True)
             ys_std = ys.std(dim=1, keepdim=True) + 1e-6
             ys = (ys - ys_mean) / ys_std
-
-        # print(f"DEBUG: xs shape: {xs.shape}, ys shape: {ys.shape}")
-        # print(f"DEBUG: predict_inds: {predict_inds}")
-        # print(f"DEBUG: sequence_structure total_length: {sequence_structure['total_length'] if sequence_structure else 'None'}")
 
         loss_func = task.get_training_metric()
 
@@ -468,56 +338,53 @@ def train(model, args, device):
             max_grad_norm=max_gn,
         )
 
-        # Why loss ~1 when predicting one position: if targets are normalized (variance 1) and predictions ~0, MSE≈1.
-        if i == 0 and predict_inds is not None and len(predict_inds) == 1:
-            tgt = ys[:, predict_inds[0]].to(device)
-            pred = output[:, 0]
-            print(f"  [single-target] pred mean={pred.mean().item():.4f} std={pred.std().item():.4f}  tgt mean={tgt.mean().item():.4f} std={tgt.std().item():.4f}  -> want pred to track tgt for loss to drop")
-        
-        # Critical diagnostic: check if loss is being computed correctly
-        if i == 0:
-            print(f"\nLOSS DEBUG (step {i}):")
-            print(f"  output shape: {output.shape}")
-            print(f"  output sample (first 3): {output[:3, 0].cpu().tolist() if len(output.shape) > 1 else output[:3].cpu().tolist()}")
-            if predict_inds is not None and len(predict_inds) > 0:
-                print(f"  ys targets shape: {ys[:, predict_inds].shape}")
-                print(f"  ys targets (first 3): {ys[:3, predict_inds[0]].cpu().tolist()}")
-                print(f"  Loss computed on: output vs ys[:, {predict_inds}]")
-                manual_loss = ((output[:, 0] - ys[:, predict_inds[0]].to(device))**2).mean()
-                print(f"  Manual MSE loss: {manual_loss.item():.6f}")
-                print(f"  Reported loss: {loss:.6f}")
-            else:
-                print(f"  ys shape: {ys.shape}")
-                print(f"  Loss computed on: output vs ys (all positions)")
-            print()
-        
-        # Diagnostic prints for predictions
-        if i == 0 or (i < 10 and i % 2 == 0):
-            print(f"\nStep {i}:")
-            print(f"  Loss: {loss:.4f}")
-            if output is not None and len(output.shape) > 0:
-                print(f"  Predictions shape: {output.shape}")
-                print(f"  Predictions (first 3 examples): {output[:3, 0].cpu().tolist()}")
-                print(f"  True targets (first 3 examples): {ys[:3, predict_inds[0]].cpu().tolist()}")
-                pred_errors = (output[:, 0] - ys[:, predict_inds[0]].to(device)).abs()
-                print(f"  Prediction errors: mean={pred_errors.mean().item():.4f}, max={pred_errors.max().item():.4f}")
-                
-                # For first example, show what the model should learn
-                if i == 0 and args.training.task == "group_mixture_linear":
-                    target_comp = data_sampler.target_components[0].item()
-                    T_target = data_sampler.target_cluster_context_points
-                    K = data_sampler.n_components
-                    C = data_sampler.contexts_per_component
-                    target_start = K * C
-                    target_context_end = target_start + T_target
-                    target_context_ys = ys[0, target_start:target_context_end].cpu().numpy()
-                    print(f"\n  First example analysis:")
-                    print(f"    Target component: {target_comp}")
-                    print(f"    Target cluster context ys (for inference): {target_context_ys}")
-                    print(f"    Target y (to predict): {ys[0, predict_inds[0]].item():.3f}")
-                    print(f"    Model prediction: {output[0, 0].item():.3f}")
-                    print(f"    Model should: infer component {target_comp} from target context, then predict")
-            print()
+        # [USELESS — step-0 loss / prediction dumps for debugging; not used by the training objective.]
+        # if i == 0 and predict_inds is not None and len(predict_inds) == 1:
+        #     tgt = ys[:, predict_inds[0]].to(device)
+        #     pred = output[:, 0]
+        #     print(f"  [single-target] pred mean={pred.mean().item():.4f} std={pred.std().item():.4f}  tgt mean={tgt.mean().item():.4f} std={tgt.std().item():.4f}  -> want pred to track tgt for loss to drop")
+        #
+        # if i == 0:
+        #     print(f"\nLOSS DEBUG (step {i}):")
+        #     print(f"  output shape: {output.shape}")
+        #     print(f"  output sample (first 3): {output[:3, 0].cpu().tolist() if len(output.shape) > 1 else output[:3].cpu().tolist()}")
+        #     if predict_inds is not None and len(predict_inds) > 0:
+        #         print(f"  ys targets shape: {ys[:, predict_inds].shape}")
+        #         print(f"  ys targets (first 3): {ys[:3, predict_inds[0]].cpu().tolist()}")
+        #         print(f"  Loss computed on: output vs ys[:, {predict_inds}]")
+        #         manual_loss = ((output[:, 0] - ys[:, predict_inds[0]].to(device))**2).mean()
+        #         print(f"  Manual MSE loss: {manual_loss.item():.6f}")
+        #         print(f"  Reported loss: {loss:.6f}")
+        #     else:
+        #         print(f"  ys shape: {ys.shape}")
+        #         print(f"  Loss computed on: output vs ys (all positions)")
+        #     print()
+        #
+        # if i == 0 or (i < 10 and i % 2 == 0):
+        #     print(f"\nStep {i}:")
+        #     print(f"  Loss: {loss:.4f}")
+        #     if output is not None and len(output.shape) > 0:
+        #         print(f"  Predictions shape: {output.shape}")
+        #         print(f"  Predictions (first 3 examples): {output[:3, 0].cpu().tolist()}")
+        #         print(f"  True targets (first 3 examples): {ys[:3, predict_inds[0]].cpu().tolist()}")
+        #         pred_errors = (output[:, 0] - ys[:, predict_inds[0]].to(device)).abs()
+        #         print(f"  Prediction errors: mean={pred_errors.mean().item():.4f}, max={pred_errors.max().item():.4f}")
+        #
+        #         if i == 0 and args.training.task == "group_mixture_linear":
+        #             target_comp = data_sampler.target_components[0].item()
+        #             T_target = data_sampler.target_cluster_context_points
+        #             K = data_sampler.n_components
+        #             C = data_sampler.contexts_per_component
+        #             target_start = K * C
+        #             target_context_end = target_start + T_target
+        #             target_context_ys = ys[0, target_start:target_context_end].cpu().numpy()
+        #             print(f"\n  First example analysis:")
+        #             print(f"    Target component: {target_comp}")
+        #             print(f"    Target cluster context ys (for inference): {target_context_ys}")
+        #             print(f"    Target y (to predict): {ys[0, predict_inds[0]].item():.3f}")
+        #             print(f"    Model prediction: {output[0, 0].item():.3f}")
+        #             print(f"    Model should: infer component {target_comp} from target context, then predict")
+        #     print()
 
         point_wise_loss_func = task.get_metric()
         if predict_inds is not None and len(predict_inds) > 0:
@@ -539,8 +406,9 @@ def train(model, args, device):
             idx_rest = [j for j in range(len(predict_inds)) if predict_inds[j] not in first_of_segment]
             loss_first_of_segment = point_wise_loss[idx_first].mean().item() if idx_first else float('nan')
             loss_rest = point_wise_loss[idx_rest].mean().item() if idx_rest else float('nan')
-            if i < 3 or (i % 500 == 0 and i > 0):
-                print(f"  [group_mixture] loss_first_of_segment={loss_first_of_segment:.4f} (pos {first_of_segment}), loss_rest={loss_rest:.4f}")
+            # [USELESS] Periodic stdout split of loss on first-of-segment vs rest (wandb already logs these keys).
+            # if i < 3 or (i % 500 == 0 and i > 0):
+            #     print(f"  [group_mixture] loss_first_of_segment={loss_first_of_segment:.4f} (pos {first_of_segment}), loss_rest={loss_rest:.4f}")
 
         if predict_inds is not None and len(predict_inds) > 0:
             # For multi-context, use a reasonable baseline
@@ -790,8 +658,9 @@ def main(args):
             args.test_run = True
 
     model = build_model(args.model)
-    print(args)
-    print(args.model)
+    # [USELESS] Huge stdout dump; full config is in YAML + wandb.
+    # print(args)
+    # print(args.model)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.train()

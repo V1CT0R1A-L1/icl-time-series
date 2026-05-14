@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+[USELESS for core train/eval] Offline analysis of Phase-1 wandb sweeps (not on training hot path).
 Analysis script for Phase 1: Component Count Scaling
 Generates publication-quality visualizations from experiment results.
 """

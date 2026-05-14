@@ -1,4 +1,5 @@
 """
+[USELESS for core train/eval] Meeting-report plot generator (reads wandb / local dirs).
 Script to generate visualizations for meeting reports.
 Creates plots for:
 1. Task structure visualization

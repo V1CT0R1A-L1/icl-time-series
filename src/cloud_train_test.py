@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Minimal training test to run on cloud
+[USELESS for core train/eval] Optional smoke test for a minimal cloud training loop.
+Not imported by `train.py` or `eval.py`; safe to ignore for publication workflows.
 """
 import torch
 import torch.nn as nn

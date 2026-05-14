@@ -399,6 +399,7 @@ def read_run_dir(run_dir):
     return df
 
 if __name__ == "__main__":
+    # [USELESS for library use] Optional CLI: batch `get_run_metrics` over every task/run under `run_dir`.
     run_dir = sys.argv[1]
     for task in os.listdir(run_dir):
         task_dir = os.path.join(run_dir, task)

@@ -209,6 +209,7 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
             component_assignments[b, target_start:target_context_end] = target_comp
             component_assignments[b, T - 1] = target_comp  # Prediction point also uses same component
         
+        # [USELESS] Dead code / agent JSON: optional cluster reorder experiment (fully commented; not used by training/eval).
         # # Randomize the order of context clusters (but keep target cluster at the end)
         # # This makes the task harder by removing positional cues about which cluster is which
         # context_length = K * C
