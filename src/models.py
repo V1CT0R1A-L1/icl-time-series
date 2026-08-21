@@ -285,15 +285,21 @@ class TransformerModel(nn.Module):
         predicting_all_positions = (len(inds) == ys.shape[1] and 
                                      set(inds.tolist()) == set(range(ys.shape[1])))
 
-        # Predict-every-position without leakage: sequential decode with masked target at each step.
-        # Each inner call uses inds=[i], so it is NOT "all positions" and the masking branch applies.
+        # Predict-every-position: ONE causal forward (standard ICL / Garg-style).
+        # Read out at each x_i (token 2i). Causal attention sees y_0..y_{i-1} only — no
+        # need to mask, and no need for T sequential forwards (which stalled learning).
+        # Pairs format is only for single last-query prediction; use interleaved here.
         if predicting_all_positions:
-            T = ys.shape[1]
-            preds = []
-            for i in range(T):
-                pred_i = self.forward(xs, ys, inds=[i], sequence_structure=sequence_structure)
-                preds.append(pred_i)
-            return torch.cat(preds, dim=1)
+            zs = self._combine(xs, ys)
+            embeds = self._read_in(zs)
+            seq_len = embeds.size(1)
+            type_ids = torch.arange(seq_len, device=embeds.device) % 2
+            embeds = embeds + self.token_type_embedding(type_ids).unsqueeze(0)
+            if sequence_structure is not None:
+                embeds = self._add_special_token_embeddings(embeds, sequence_structure)
+            output = self._backbone(inputs_embeds=embeds).last_hidden_state
+            prediction = self._read_out(output)
+            return prediction[:, 0::2, 0]  # (B, N_total)
 
         # Mask labels at prediction indices ONLY if:
         # 1. inds was explicitly provided (not None)
