@@ -1,0 +1,13 @@
+# Noiseless (σ=0) variant of group_mixture_linear.
+# Main collaborator results use σ=0.2 — see group_mixture_linear.yaml.
+inherit:
+  - group_mixture_linear.yaml
+
+training:
+  task_kwargs:
+    noise_std: 0.0
+
+out_dir: ../models/group_mixture_linear_noiseless
+
+wandb:
+  name: "group_mixture_linear_noiseless"

@@ -1,5 +1,5 @@
 inherit:
-  - models/standard.yaml
+  - models/small.yaml
   - wandb.yaml
 
 model:
@@ -11,27 +11,25 @@ training:
   task: group_mixture_linear
   data: group_mixture_linear
   task_kwargs:
-    n_components: 2             # K (number of components)
-    contexts_per_component: 10  # C (final value; curriculum.points drives current C during training)
-    target_cluster_context_points: 10  # T (points with y-values in target cluster for inference)
-    noise_std: 0.0
-    scale: 0.5                # target scale
-    normalize_ys: false       # set true to report MSE in normalized space
-    # Switch: true = predict ONE position (target query only). false = predict ALL positions.
+    n_components: 2             # K
+    # Collaborator notation: T_ctx / T_tgt (legacy keys kept for train.py curriculum)
+    contexts_per_component: 10  # T_ctx (curriculum.points drives current T_ctx during training)
+    target_cluster_context_points: 10  # T_tgt (labeled points in target cluster)
+    # Main collaborator setting: observation noise σ=0.2 (use group_mixture_linear_noiseless.yaml for σ=0)
+    noise_std: 0.2
+    scale: 1.0                # y = scale * x^T β; β unit-norm (g~N(0,I), β=g/||g||)
+    normalize_ys: false
     predict_target_only: false
-    # Switch: false = group into clusters. true = shuffle only context clusters (target cluster stays in order).
     shuffle_context_points: false
   batch_size: 64
-  learning_rate: 0.0005   # lower LR so loss can descend to ~0 in noiseless case (0.003 often plateaus at ~0.3)
-  lr_warmup_steps: 300    # linear warmup; helps loss descend smoothly in noiseless ICL
+  learning_rate: 0.0005
+  lr_warmup_steps: 300
   save_every_steps: 1000
-  keep_every_steps: 100000   # also saves state_{step}.pt at these steps so you can restore (e.g. copy state_9000.pt -> state.pt)
+  keep_every_steps: 100000
   train_steps: 50001
   # resume: true = load state.pt when present. resume: false = always start from step 0 (ignore state.pt).
   resume: false
-  # Curriculum: ramp difficulty over time. group_mixture_linear uses both.
-  # - dims: number of input dimensions used (rest zeroed). Start small, ramp to full.
-  # - points: used as contexts_per_component (C) during training. Start with short sequences, ramp to full.
+  # Curriculum: points = T_ctx during training
   curriculum:
     dims:
       start: 2
@@ -50,4 +48,3 @@ wandb:
   name: "group_mixture_linear"
 
 test_run: False
-

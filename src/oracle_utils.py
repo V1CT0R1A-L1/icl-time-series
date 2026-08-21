@@ -1,19 +1,20 @@
 """
-Baselines for group_mixture_linear evaluation.
+Baselines for group_mixture_linear evaluation (collaborator naming).
 
-- **Ground truth (known mixture)**: true w_k per position — ``compute_ground_truth_mixture_mse_by_position``.
-- **True w, unknown assignment (Bayes)**: knows ``components`` but not which component
-  sits in which context cluster or target; uniform prior over context permutations and
-  over target component — ``compute_true_w_unknown_assignment_bayesian_mse_by_position``
-  (K!·K enumeration; K≤8).
-- **Bayesian mixture**: causal LS per context cluster; on the target, posterior over
-  K context components from target (x,y) — ``compute_bayesian_mixture_mse_by_position``.
-- **Pure LS**: same context as above; on the target, a single causal LS model fit only
-  to target-segment (x,y) (ignores mixture over K) — ``compute_pure_ls_target_mse_by_position``.
-- **Hybrid**: on the target only, ``alpha`` * Bayesian + (1-alpha) * pure-LS target —
-  ``compute_hybrid_bayesian_ls_mse_by_position``.
+- **Oracle** (``ground_truth``): knows β_k and cluster assignment.
+- **Bayes** (``true_w_unknown_assignment_bayesian``): knows β_k, infers assignment.
+- **Current-task ridge** (``current_task_ridge`` / ``pure_ls_target``): ridge/LS on
+  target-cluster history only (same as former “OLS / LS target only”).
+- **History ridge** (``history_ridge``): ridge/LS on all previous points in the
+  sequence (same as former “OLS all data”).
+- **Mixture Bayes** (``bayesian_mixture``): causal LS per context cluster + Bayes on target.
+- **Hybrid** (``hybrid_bayesian_ls``): mixture of Bayes and current-task ridge on target.
 
-Use ``compute_all_group_mixture_baselines_mse_by_position`` for a dict of all curves (extensible).
+Notation: β_k = unit-sphere coefficients; T_ctx = points per context cluster;
+T_tgt = labeled target points; N_total = sequence length (do not call this T —
+collaborator uses T for supports-per-task).
+
+Use ``compute_all_group_mixture_baselines_mse_by_position`` for a dict of all curves.
 
 **Observation noise:** pass ``target_noise_std`` from the task. If ``<= 0``, Bayesian updates use the
 noiseless limit: uniform posterior over hypotheses with minimum SSE (not Gaussian smoothing).
@@ -27,6 +28,17 @@ from collections import OrderedDict
 
 import torch
 
+
+# Display names aligned with collaborator writeups
+BASELINE_DISPLAY_NAMES = {
+    "ground_truth": "Oracle",
+    "true_w_unknown_assignment_bayesian": "Bayes",
+    "current_task_ridge": "Current-task ridge",
+    "pure_ls_target": "Current-task ridge",  # legacy key
+    "history_ridge": "History ridge",
+    "bayesian_mixture": "Mixture Bayes",
+    "hybrid_bayesian_ls": "Hybrid Bayes-ridge",
+}
 
 def _posterior_uniform_argmin_from_sse(sse):
     """Uniform over hypotheses with minimum SSE (noiseless / σ→0 Bayes limit). sse: (n,) or (B, K)."""
@@ -233,16 +245,17 @@ def _mse_from_predictions(y_pred, ys):
 
 def compute_ground_truth_mixture_mse_by_position(xs, ys, components, component_assignments, scale):
     """
-    Per-position MSE when w_k is known at every position: uses ``components[b, k]`` with
-    k = ``component_assignments[b, t]`` (same mean as the generative task).
+    Oracle: per-position MSE when β_k and assignment are known. Uses unit-sphere
+    ``components[b, k]`` with k = ``component_assignments[b, n]``, then multiplies
+    by ``scale`` (same mean as the generative task).
 
     Squared error vs observed ``ys`` reflects observation noise where ``noise_std > 0``.
     """
-    B, T, d = xs.shape
+    B, N_total, d = xs.shape
     device = xs.device
     components = components.to(device)
     comp_ids = component_assignments.to(device).long()
-    batch_idx = torch.arange(B, device=device).unsqueeze(1).expand(B, T)
+    batch_idx = torch.arange(B, device=device).unsqueeze(1).expand(B, N_total)
     w_for_points = components[batch_idx, comp_ids]
     y_pred = (xs.unsqueeze(-2) @ w_for_points).squeeze(-1).squeeze(-1) * scale
     sq_err = (y_pred - ys) ** 2
@@ -255,7 +268,7 @@ def compute_true_w_unknown_assignment_bayesian_mse_by_position(
     target_noise_std=1.0,
 ):
     """
-    Knows the true weight vectors ``w_0..w_{K-1}`` (from ``components`` × ``scale``)
+    Knows the true coefficient vectors ``β_0..β_{K-1}`` (unit-sphere ``components`` × ``scale``)
     but not **which** component is active in **which** context cluster or in the target.
 
     Prior: uniform over permutations σ assigning the K components to the K context
@@ -380,11 +393,43 @@ def compute_pure_ls_target_mse_by_position(
     target_noise_std=1.0,
 ):
     """
-    Causal LS within each context cluster (same as Bayesian context). On the target
-    segment, a single linear model fit by causal LS to target (x,y) only — no mixture
-    over the K components.
+    Current-task ridge: causal ridge/LS on the **target cluster only**
+    (collaborator name; formerly “OLS / LS target only”).
+    Context clusters still get causal LS for the early part of the curve.
     """
+    del components, component_assignments, scale, output_norm_factor
     y_pred = _predictions_pure_ls_target_inner(xs, ys, K, C, T_target, target_noise_std)
+    return _mse_from_predictions(y_pred, ys)
+
+
+def compute_current_task_ridge_mse_by_position(*args, **kwargs):
+    """Alias of ``compute_pure_ls_target_mse_by_position`` (collaborator name)."""
+    return compute_pure_ls_target_mse_by_position(*args, **kwargs)
+
+
+def _predictions_history_ridge_inner(xs, ys):
+    """
+    History ridge: at each position n, fit ridge/LS on all previous points (0..n-1)
+    and predict x_n (collaborator “History ridge”; formerly “OLS all data”).
+    """
+    B, N_total, d = xs.shape
+    device = xs.device
+    y_pred = torch.zeros(B, N_total, device=device)
+    for n in range(N_total):
+        if n == 0:
+            y_pred[:, n] = 0.0
+        else:
+            y_pred[:, n] = _fit_w_per_batch(xs[:, :n], ys[:, :n], xs[:, n], d, device)
+    return y_pred
+
+
+def compute_history_ridge_mse_by_position(
+    xs, ys, components=None, component_assignments=None, K=None, C=None, T_target=None,
+    scale=None, output_norm_factor=None, target_noise_std=None,
+):
+    """History ridge MSE curve (ignores mixture metadata; API keeps parity kwargs)."""
+    del components, component_assignments, K, C, T_target, scale, output_norm_factor, target_noise_std
+    y_pred = _predictions_history_ridge_inner(xs, ys)
     return _mse_from_predictions(y_pred, ys)
 
 
@@ -395,8 +440,9 @@ def compute_hybrid_bayesian_ls_mse_by_position(
 ):
     """
     Context: same as Bayesian / pure LS. Target positions: ``hybrid_alpha`` * Bayesian
-    prediction + (1 - ``hybrid_alpha``) * pure-LS-on-target-only prediction (default 0.5 each).
+    prediction + (1 - ``hybrid_alpha``) * current-task ridge prediction (default 0.5 each).
     """
+    del components, component_assignments, scale, output_norm_factor
     y_b = _predictions_bayesian_mixture_inner(xs, ys, K, C, T_target, target_noise_std)
     y_p = _predictions_pure_ls_target_inner(xs, ys, K, C, T_target, target_noise_std)
     context_length = K * C
@@ -414,12 +460,11 @@ def compute_all_group_mixture_baselines_mse_by_position(
     hybrid_alpha=0.5,
 ):
     """
-    All built-in baselines as (name -> (T,) numpy MSE per position).
+    All built-in baselines as (name -> (N_total,) numpy MSE per position).
 
-    Order is stable for plotting: ground truth, unknown-assignment Bayes (true w),
-    Bayesian (LS context), pure LS target, hybrid.
+    Keys (see BASELINE_DISPLAY_NAMES): Oracle, Bayes, Mixture Bayes,
+    Current-task ridge, History ridge, Hybrid.
     ``target_noise_std``: pass task noise; ``<= 0`` triggers noiseless Bayes (min-SSE posteriors).
-    Extend this dict when adding new methods.
     """
     out = OrderedDict()
     out["ground_truth"] = compute_ground_truth_mixture_mse_by_position(
@@ -435,7 +480,13 @@ def compute_all_group_mixture_baselines_mse_by_position(
         xs, ys, components, component_assignments, K, C, T_target, scale,
         target_noise_std=target_noise_std,
     )
-    out["pure_ls_target"] = compute_pure_ls_target_mse_by_position(
+    current = compute_pure_ls_target_mse_by_position(
+        xs, ys, components, component_assignments, K, C, T_target, scale,
+        target_noise_std=target_noise_std,
+    )
+    out["current_task_ridge"] = current
+    out["pure_ls_target"] = current  # legacy alias
+    out["history_ridge"] = compute_history_ridge_mse_by_position(
         xs, ys, components, component_assignments, K, C, T_target, scale,
         target_noise_std=target_noise_std,
     )

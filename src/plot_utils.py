@@ -1,5 +1,8 @@
 import os
+import re
+from pathlib import Path
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -8,6 +11,58 @@ from models import build_model
 
 sns.set_theme("notebook", "darkgrid")
 palette = sns.color_palette("colorblind")
+
+# Default paper figure directory: <repo>/figures/paper
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_FIGURE_DIR = _REPO_ROOT / "figures" / "paper"
+
+
+def configure_pdf_savefig(dpi=300):
+    """Matplotlib defaults for paper-ready vector PDFs (editable TrueType text)."""
+    mpl.rcParams.update(
+        {
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+            "savefig.dpi": dpi,
+            "savefig.bbox": "tight",
+            "savefig.pad_inches": 0.02,
+        }
+    )
+
+
+def save_figure_pdf(fig, stem, out_dir=None, dpi=300, counter=None):
+    """
+    Save ``fig`` as a vector PDF under ``out_dir`` (default: repo ``figures/paper``).
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+    stem : str
+        Base filename (spaces/slashes sanitized). Extension is always ``.pdf``.
+    out_dir : str | Path | None
+    dpi : int
+        Embedded raster DPI for any non-vector artists (e.g. imshow).
+    counter : dict | None
+        Optional ``{\"n\": int}`` for zero-padded ordering prefixes (``01_stem.pdf``).
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute path written.
+    """
+    out = Path(out_dir) if out_dir is not None else DEFAULT_FIGURE_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\w.\-]+", "_", str(stem).strip()).strip("_") or "figure"
+    if counter is not None:
+        counter["n"] = int(counter.get("n", 0)) + 1
+        name = f"{counter['n']:02d}_{safe}.pdf"
+    else:
+        name = f"{safe}.pdf"
+    path = out / name
+    configure_pdf_savefig(dpi=dpi)
+    fig.savefig(path, format="pdf", dpi=dpi, bbox_inches="tight")
+    print(f"Saved: {path}")
+    return path
 
 
 relevant_model_names = {

@@ -164,7 +164,7 @@ def train(model, args, device):
         # For multi-context tasks, use the multi_context_mixture sampler
         data_sampler = get_data_sampler("multi_context_mixture", n_dims=n_dims, **task_kwargs)
     elif args.training.task == "group_mixture_linear":
-        # On-the-fly grouped mixture linear sampler; curriculum.points drives contexts_per_component (C)
+        # On-the-fly grouped mixture linear; curriculum.points drives T_ctx (YAML: contexts_per_component)
         task_kwargs_gml = dict(task_kwargs)
         task_kwargs_gml["contexts_per_component"] = curriculum.n_points
         data_sampler = get_data_sampler("group_mixture_linear", n_dims=n_dims, **task_kwargs_gml)
@@ -338,54 +338,6 @@ def train(model, args, device):
             max_grad_norm=max_gn,
         )
 
-        # [USELESS — step-0 loss / prediction dumps for debugging; not used by the training objective.]
-        # if i == 0 and predict_inds is not None and len(predict_inds) == 1:
-        #     tgt = ys[:, predict_inds[0]].to(device)
-        #     pred = output[:, 0]
-        #     print(f"  [single-target] pred mean={pred.mean().item():.4f} std={pred.std().item():.4f}  tgt mean={tgt.mean().item():.4f} std={tgt.std().item():.4f}  -> want pred to track tgt for loss to drop")
-        #
-        # if i == 0:
-        #     print(f"\nLOSS DEBUG (step {i}):")
-        #     print(f"  output shape: {output.shape}")
-        #     print(f"  output sample (first 3): {output[:3, 0].cpu().tolist() if len(output.shape) > 1 else output[:3].cpu().tolist()}")
-        #     if predict_inds is not None and len(predict_inds) > 0:
-        #         print(f"  ys targets shape: {ys[:, predict_inds].shape}")
-        #         print(f"  ys targets (first 3): {ys[:3, predict_inds[0]].cpu().tolist()}")
-        #         print(f"  Loss computed on: output vs ys[:, {predict_inds}]")
-        #         manual_loss = ((output[:, 0] - ys[:, predict_inds[0]].to(device))**2).mean()
-        #         print(f"  Manual MSE loss: {manual_loss.item():.6f}")
-        #         print(f"  Reported loss: {loss:.6f}")
-        #     else:
-        #         print(f"  ys shape: {ys.shape}")
-        #         print(f"  Loss computed on: output vs ys (all positions)")
-        #     print()
-        #
-        # if i == 0 or (i < 10 and i % 2 == 0):
-        #     print(f"\nStep {i}:")
-        #     print(f"  Loss: {loss:.4f}")
-        #     if output is not None and len(output.shape) > 0:
-        #         print(f"  Predictions shape: {output.shape}")
-        #         print(f"  Predictions (first 3 examples): {output[:3, 0].cpu().tolist()}")
-        #         print(f"  True targets (first 3 examples): {ys[:3, predict_inds[0]].cpu().tolist()}")
-        #         pred_errors = (output[:, 0] - ys[:, predict_inds[0]].to(device)).abs()
-        #         print(f"  Prediction errors: mean={pred_errors.mean().item():.4f}, max={pred_errors.max().item():.4f}")
-        #
-        #         if i == 0 and args.training.task == "group_mixture_linear":
-        #             target_comp = data_sampler.target_components[0].item()
-        #             T_target = data_sampler.target_cluster_context_points
-        #             K = data_sampler.n_components
-        #             C = data_sampler.contexts_per_component
-        #             target_start = K * C
-        #             target_context_end = target_start + T_target
-        #             target_context_ys = ys[0, target_start:target_context_end].cpu().numpy()
-        #             print(f"\n  First example analysis:")
-        #             print(f"    Target component: {target_comp}")
-        #             print(f"    Target cluster context ys (for inference): {target_context_ys}")
-        #             print(f"    Target y (to predict): {ys[0, predict_inds[0]].item():.3f}")
-        #             print(f"    Model prediction: {output[0, 0].item():.3f}")
-        #             print(f"    Model should: infer component {target_comp} from target context, then predict")
-        #     print()
-
         point_wise_loss_func = task.get_metric()
         if predict_inds is not None and len(predict_inds) > 0:
             # For multi-context: only compute loss on prediction positions
@@ -406,9 +358,6 @@ def train(model, args, device):
             idx_rest = [j for j in range(len(predict_inds)) if predict_inds[j] not in first_of_segment]
             loss_first_of_segment = point_wise_loss[idx_first].mean().item() if idx_first else float('nan')
             loss_rest = point_wise_loss[idx_rest].mean().item() if idx_rest else float('nan')
-            # [USELESS] Periodic stdout split of loss on first-of-segment vs rest (wandb already logs these keys).
-            # if i < 3 or (i % 500 == 0 and i > 0):
-            #     print(f"  [group_mixture] loss_first_of_segment={loss_first_of_segment:.4f} (pos {first_of_segment}), loss_rest={loss_rest:.4f}")
 
         if predict_inds is not None and len(predict_inds) > 0:
             # For multi-context, use a reasonable baseline
@@ -658,9 +607,6 @@ def main(args):
             args.test_run = True
 
     model = build_model(args.model)
-    # [USELESS] Huge stdout dump; full config is in YAML + wandb.
-    # print(args)
-    # print(args.model)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.train()

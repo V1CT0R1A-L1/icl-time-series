@@ -39,21 +39,23 @@ class DataSampler:
 
 class OnTheFlyMixtureLinearSampler(DataSampler):
     """
-    Redesigned for proper in-context learning:
-    
-    Sequence layout per example:
-      [Cluster 0: C points from random component] 
-      [Cluster 1: C points from random component] 
+    Grouped mixture linear ICL sampler (collaborator notation).
+
+    Sequence layout per example (length ``N_total``):
+      [Cluster 0: T_ctx points from β_{σ(0)}]
       ...
-      [Cluster K-1: C points from random component]
-      [Target Cluster: T points with y-values + 1 point to predict]
-    
-    The model must:
-    1. Learn weight vectors w_0, w_1, ..., w_{K-1} from context clusters
-    2. Infer which component is used in the target cluster from first T points
-    3. Predict the last target point using that component
-    
-    Total length = (K × C) + (T + 1)
+      [Cluster K-1: T_ctx points from β_{σ(K-1)}]
+      [Target cluster: T_tgt labeled points + 1 query]
+
+    Coefficients (unit sphere):
+      g_k ~ N(0, I_d),   β_k = g_k / ||g_k||_2
+    Labels: y = scale · xᵀ β_k (+ optional noise).
+
+    Note: ``T`` is reserved for “supports per task” in collaborator notation;
+    total sequence length is always ``N_total`` (not ``T``).
+
+    Legacy YAML keys ``contexts_per_component`` / ``target_cluster_context_points``
+    are accepted as aliases of ``T_ctx`` / ``T_tgt``.
 
     **x distribution (robustness / OOD):** by default ``x_distribution_train`` is ``standard``
     (iid Gaussian on all coordinates). Set ``ood_training: true`` or
@@ -68,21 +70,32 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         n_dims,
         n_components=3,
         contexts_per_component=4,
-        target_cluster_context_points=2,  # T: number of points with y-values in target cluster
+        target_cluster_context_points=2,
         noise_std=0.0,
         scale=1.0,
         **kwargs,
     ):
         super().__init__(n_dims)
-        self.n_components = n_components
-        self.contexts_per_component = contexts_per_component
-        self.target_cluster_context_points = target_cluster_context_points  # T
+        # Collaborator notation (preferred). Legacy names kept as aliases.
+        T_ctx = kwargs.pop("T_ctx", None)
+        T_tgt = kwargs.pop("T_tgt", None)
+        if T_ctx is not None:
+            contexts_per_component = int(T_ctx)
+        if T_tgt is not None:
+            target_cluster_context_points = int(T_tgt)
+
+        self.n_components = n_components  # K
+        self.T_ctx = int(contexts_per_component)
+        self.T_tgt = int(target_cluster_context_points)
+        # Backward-compatible aliases
+        self.contexts_per_component = self.T_ctx
+        self.target_cluster_context_points = self.T_tgt
         self.noise_std = noise_std
         self.scale = scale
         # Predict only the target query (last position): standard ICL evaluation, full context, clear learning signal.
         self.predict_target_only = kwargs.pop('predict_target_only', True)
         # When False (default): data ordered by clusters (cluster 0, cluster 1, ..., target cluster).
-        # When True: shuffle only the K context clusters (0..K*C-1); target cluster (K*C..T-1) stays in order.
+        # When True: shuffle only the K context clusters (0..K*T_ctx-1); target cluster stays in order.
         self.shuffle_context_points = kwargs.pop('shuffle_context_points', False)
 
         # x support for training: "standard" = full Gaussian (default); "truncated_half_space_dim0"
@@ -112,12 +125,13 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         self.base_sampler = GaussianSampler(n_dims, **filtered_kwargs)
 
         # State for the current batch (set in sample_xs)
-        self.current_components = None          # (B, K, d, 1)
-        self.component_assignments = None       # (B, T)
+        self.current_components = None          # (B, K, d, 1)  unit-sphere β_k
+        self.component_assignments = None       # (B, N_total)
         self.target_components = None           # (B,) - component used for target cluster
         self.cluster_assignments = None          # (B, K) - which component each cluster uses
-        # Total = K context clusters × C points + target cluster (T context + 1 prediction)
-        self.total_length = (self.n_components * self.contexts_per_component) + (self.target_cluster_context_points + 1)
+        # N_total = K * T_ctx + (T_tgt + 1)
+        self.N_total = (self.n_components * self.T_ctx) + (self.T_tgt + 1)
+        self.total_length = self.N_total  # alias (avoid calling this "T")
 
     def get_sequence_structure(self):
         """
@@ -126,22 +140,25 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         Else: predict all positions (autoregressive).
         """
         if self.predict_target_only:
-            predict_inds = [self.total_length - 1]
+            predict_inds = [self.N_total - 1]
             predict_length = 1
         else:
-            predict_inds = list(range(self.total_length))
-            predict_length = self.total_length
+            predict_inds = list(range(self.N_total))
+            predict_length = self.N_total
         return {
-            "total_length": self.total_length,
+            "total_length": self.N_total,  # N_total (alias key for train.py)
+            "N_total": self.N_total,
+            "T_ctx": self.T_ctx,
+            "T_tgt": self.T_tgt,
             "predict_inds": predict_inds,
-            "context_length": self.contexts_per_component,  # C contexts per component
+            "context_length": self.T_ctx,  # points per context cluster
             "predict_length": predict_length,
         }
 
     def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None, **kwargs):
-        if n_points != self.total_length:
+        if n_points != self.N_total:
             raise ValueError(
-                f"OnTheFlyMixtureLinearSampler expected n_points={self.total_length}, "
+                f"OnTheFlyMixtureLinearSampler expected n_points=N_total={self.N_total}, "
                 f"got {n_points}"
             )
         # Optional fixed assignments for eval (e.g. context clusters = [0,1], target = 0 or 1)
@@ -153,7 +170,7 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
 
         xs_b = self.base_sampler.sample_xs(
             n_points, b_size, n_dims_truncated=n_dims_truncated, seeds=seeds
-        )  # (B, T, d)
+        )  # (B, N_total, d)
 
         mode = x_distribution_override if x_distribution_override is not None else self.x_distribution_train
         if mode == "truncated_half_space_dim0":
@@ -167,13 +184,15 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
                 f"(got {mode!r})"
             )
 
-        B, T, d = xs_b.shape
+        B, N_total, d = xs_b.shape
         K = self.n_components
-        C = self.contexts_per_component
-        T_target = self.target_cluster_context_points  # T: points with y-values in target cluster
+        T_ctx = self.T_ctx
+        T_tgt = self.T_tgt
 
-        # Sample K components per example: w ~ N(0, I) then scaled
-        components = torch.randn(B, K, d, 1, device=xs_b.device) * self.scale  # (B,K,d,1)
+        # β_k on the unit sphere: g_k ~ N(0, I), β_k = g_k / ||g_k||_2
+        # Output magnitude is controlled separately by task ``scale`` via y = scale * x^T β.
+        g = torch.randn(B, K, d, 1, device=xs_b.device)  # (B,K,d,1)
+        components = g / g.norm(dim=2, keepdim=True).clamp_min(1e-12)
 
         if fixed_cluster_assignments is not None and not isinstance(fixed_cluster_assignments, torch.Tensor):
             fixed_cluster_assignments = torch.tensor(fixed_cluster_assignments, dtype=torch.long, device=xs_b.device)
@@ -181,7 +200,7 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
             fixed_target_component = torch.tensor(fixed_target_component, dtype=torch.long, device=xs_b.device)
 
         # For each example, assign components to clusters (random or fixed)
-        component_assignments = torch.zeros(B, T, dtype=torch.long, device=xs_b.device)
+        component_assignments = torch.zeros(B, N_total, dtype=torch.long, device=xs_b.device)
         cluster_assignments = torch.zeros(B, K, dtype=torch.long, device=xs_b.device)
         
         for b in range(B):
@@ -191,12 +210,12 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
                 perm = torch.randperm(K, device=xs_b.device)
                 cluster_assignments[b] = perm
             
-            # Fill context clusters: each cluster gets C points from its assigned component
+            # Fill context clusters: each cluster gets T_ctx points from its assigned component
             idx = 0
             for k in range(K):
                 cluster_comp = cluster_assignments[b, k].item()
                 start = idx
-                end = idx + C
+                end = idx + T_ctx
                 component_assignments[b, start:end] = cluster_comp
                 idx = end
             
@@ -204,15 +223,15 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
                 target_comp = int(fixed_target_component[b].item()) if fixed_target_component.dim() > 0 else int(fixed_target_component.item())
             else:
                 target_comp = torch.randint(0, K, (1,), device=xs_b.device).item()
-            target_start = K * C
-            target_context_end = target_start + T_target
+            target_start = K * T_ctx
+            target_context_end = target_start + T_tgt
             component_assignments[b, target_start:target_context_end] = target_comp
-            component_assignments[b, T - 1] = target_comp  # Prediction point also uses same component
+            component_assignments[b, N_total - 1] = target_comp  # Prediction point also uses same component
         
         # [USELESS] Dead code / agent JSON: optional cluster reorder experiment (fully commented; not used by training/eval).
         # # Randomize the order of context clusters (but keep target cluster at the end)
         # # This makes the task harder by removing positional cues about which cluster is which
-        # context_length = K * C
+        # context_length = K * T_ctx
         
         # # #region agent log
         # try:
@@ -260,10 +279,10 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         #     # Reorder context clusters: create new indices for xs and component_assignments
         #     new_indices = torch.zeros(context_length, dtype=torch.long, device=xs_b.device)
         #     for new_pos, old_cluster_idx in enumerate(cluster_order):
-        #         old_start = old_cluster_idx * C
-        #         old_end = old_start + C
-        #         new_start = new_pos * C
-        #         new_end = new_start + C
+        #         old_start = old_cluster_idx * T_ctx
+        #         old_end = old_start + T_ctx
+        #         new_start = new_pos * T_ctx
+        #         new_end = new_start + T_ctx
         #         new_indices[new_start:new_end] = torch.arange(old_start, old_end, device=xs_b.device)
             
         #     # Reorder xs_b for context clusters
@@ -293,16 +312,16 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         #     except: pass
         #     # #endregion
 
-        # Optional: shuffle only the K context clusters (positions 0..K*C-1); target cluster (K*C..T-1) stays in order
+        # Optional: shuffle only the K context clusters (positions 0..K*T_ctx-1); target cluster stays in order
         # so the model can see the target cluster's (x,y) pairs and query in order.
         if self.shuffle_context_points:
-            context_length = K * C
-            target_start = K * C
+            context_length = K * T_ctx
+            target_start = K * T_ctx
             for b in range(B):
                 perm = torch.randperm(context_length, device=xs_b.device)
                 new_order = torch.cat([
                     perm,
-                    torch.arange(target_start, T, device=xs_b.device, dtype=perm.dtype),
+                    torch.arange(target_start, N_total, device=xs_b.device, dtype=perm.dtype),
                 ])
                 xs_b[b] = xs_b[b, new_order]
                 component_assignments[b] = component_assignments[b, new_order]

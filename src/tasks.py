@@ -94,8 +94,9 @@ class MultiContextMixtureLinear(Task):
         self.target_assignment = None
 
     def _generate_fresh_components(self, batch_size):
+        # Unit-sphere weight vectors; ``self.scale`` is applied only when forming y.
         components = torch.randn(batch_size, self.n_components, self.n_dims, 1)
-        return components * self.scale
+        return components / components.norm(dim=2, keepdim=True).clamp_min(1e-12)
     
     def _assign_components(self, batch_size):
         context_assignments = torch.randint(0, self.n_components, 
@@ -179,9 +180,12 @@ class OnTheFlyMixtureLinear(Task):
     Linear-regression-style task for the grouped mixture setting.
 
     It expects:
-      - components: (B, K, n_dims, 1) tensor of weight vectors
-      - component_assignments: (B, T) long tensor, each entry in {0..K-1}
-    For each position t, y[b,t] = x[b,t]^T w_{components[b, component_assignments[b,t]]}.
+      - components: (B, K, n_dims, 1) coefficient vectors β_k (unit-norm;
+        g_k ~ N(0,I), β_k = g_k/||g_k||_2 from ``OnTheFlyMixtureLinearSampler``)
+      - component_assignments: (B, N_total) long tensor, each entry in {0..K-1}
+    For each position n,
+      y[b,n] = scale * x[b,n]^T β_{components[b, component_assignments[b,n]]}
+               + noise (if noise_std > 0).
     """
 
     def __init__(
@@ -207,21 +211,21 @@ class OnTheFlyMixtureLinear(Task):
 
     def evaluate(self, xs_b):
         """
-        xs_b: (B, T, d)
+        xs_b: (B, N_total, d)
         Returns:
-          ys_b: (B, T)
+          ys_b: (B, N_total)
         """
-        B, T, d = xs_b.shape
+        B, N_total, d = xs_b.shape
         components = self.components.to(xs_b.device)
         comp_ids = self.component_assignments.to(xs_b.device)
 
-        # Gather the right weight vector per point
-        batch_idx = torch.arange(B, device=xs_b.device).unsqueeze(1).expand(B, T)
-        # w_for_points: (B, T, d, 1)
-        w_for_points = components[batch_idx, comp_ids]
+        # Gather the right coefficient vector β per point
+        batch_idx = torch.arange(B, device=xs_b.device).unsqueeze(1).expand(B, N_total)
+        # beta_for_points: (B, N_total, d, 1)
+        beta_for_points = components[batch_idx, comp_ids]
 
-        # Compute y = x^T w
-        ys_b = (xs_b.unsqueeze(-2) @ w_for_points).squeeze(-1).squeeze(-1)
+        # Compute y = scale * x^T β  (β stored unit-norm by the sampler)
+        ys_b = (xs_b.unsqueeze(-2) @ beta_for_points).squeeze(-1).squeeze(-1)
         ys_b = ys_b * self.scale
 
         if self.noise_std > 0:
