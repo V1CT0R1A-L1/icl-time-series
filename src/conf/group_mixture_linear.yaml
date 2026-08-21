@@ -17,10 +17,13 @@ training:
     target_cluster_context_points: 10  # T_tgt (labeled points in target cluster)
     # Main collaborator setting: observation noise σ=0.2 (use group_mixture_linear_noiseless.yaml for σ=0)
     noise_std: 0.2
-    scale: 1.0                # y = scale * x^T β; β unit-norm (g~N(0,I), β=g/||g||)
+    scale: 1.0                # y = scale * x^T β; β unit-norm on active coords
     normalize_ys: false
     predict_target_only: false
     shuffle_context_points: false
+    # First-of-segment positions have no same-cluster context; excluding them from the
+    # train loss avoids a ~Var(y) floor that can hide real learning.
+    exclude_first_of_segment_loss: true
   batch_size: 64
   learning_rate: 0.0005
   lr_warmup_steps: 300
@@ -29,7 +32,8 @@ training:
   train_steps: 50001
   # resume: true = load state.pt when present. resume: false = always start from step 0 (ignore state.pt).
   resume: false
-  # Curriculum: points = T_ctx during training
+  # Curriculum: points = T_ctx during training.
+  # Note: β is renormalized on the active dims (see sampler), so early k<<d still has Var(y)≈1.
   curriculum:
     dims:
       start: 2

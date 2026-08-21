@@ -189,9 +189,14 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         T_ctx = self.T_ctx
         T_tgt = self.T_tgt
 
-        # β_k on the unit sphere: g_k ~ N(0, I), β_k = g_k / ||g_k||_2
-        # Output magnitude is controlled separately by task ``scale`` via y = scale * x^T β.
+        # β_k on the unit sphere in the *active* coordinates.
+        # With dim curriculum, xs beyond n_dims_truncated are zeroed; if we normalized β in
+        # full d, E[(x·β)²] ≈ k/d and early loss floors at predict-zero (~0.4 for k=2,d=5).
+        # So: sample g, zero inactive coords, then β = g / ||g|| so signal variance ≈ 1.
         g = torch.randn(B, K, d, 1, device=xs_b.device)  # (B,K,d,1)
+        if n_dims_truncated is not None and int(n_dims_truncated) < d:
+            g = g.clone()
+            g[:, :, int(n_dims_truncated) :, :] = 0
         components = g / g.norm(dim=2, keepdim=True).clamp_min(1e-12)
 
         if fixed_cluster_assignments is not None and not isinstance(fixed_cluster_assignments, torch.Tensor):
