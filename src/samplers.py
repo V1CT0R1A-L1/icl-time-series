@@ -164,6 +164,10 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         # Optional fixed assignments for eval (e.g. context clusters = [0,1], target = 0 or 1)
         fixed_cluster_assignments = kwargs.pop("fixed_cluster_assignments", None)  # (K,) or (B, K)
         fixed_target_component = kwargs.pop("fixed_target_component", None)  # scalar or (B,)
+        # Held-out mixture eval: reuse the same β pool across many prompts.
+        # Shape (K,d,1), (1,K,d,1), or (B,K,d,1). When batch-sized, each row can differ;
+        # when a single mixture, pass (1,K,d,1) / (K,d,1) and it is expanded to B.
+        fixed_components = kwargs.pop("fixed_components", None)
         # Override train x distribution for this batch only: e.g. "standard" for full-Gaussian OOD eval
         # while the sampler was constructed with truncated_half_space_dim0 for training.
         x_distribution_override = kwargs.pop("x_distribution_override", None)
@@ -193,11 +197,27 @@ class OnTheFlyMixtureLinearSampler(DataSampler):
         # With dim curriculum, xs beyond n_dims_truncated are zeroed; if we normalized β in
         # full d, E[(x·β)²] ≈ k/d and early loss floors at predict-zero (~0.4 for k=2,d=5).
         # So: sample g, zero inactive coords, then β = g / ||g|| so signal variance ≈ 1.
-        g = torch.randn(B, K, d, 1, device=xs_b.device)  # (B,K,d,1)
-        if n_dims_truncated is not None and int(n_dims_truncated) < d:
-            g = g.clone()
-            g[:, :, int(n_dims_truncated) :, :] = 0
-        components = g / g.norm(dim=2, keepdim=True).clamp_min(1e-12)
+        if fixed_components is not None:
+            fc = fixed_components
+            if not isinstance(fc, torch.Tensor):
+                fc = torch.as_tensor(fc, dtype=torch.float32)
+            fc = fc.to(device=xs_b.device, dtype=torch.float32)
+            if fc.dim() == 3:  # (K, d, 1)
+                fc = fc.unsqueeze(0)
+            if fc.shape[0] == 1 and B > 1:
+                fc = fc.expand(B, -1, -1, -1).contiguous()
+            if tuple(fc.shape) != (B, K, d, 1):
+                raise ValueError(
+                    f"fixed_components expected shape (B,K,d,1)=({B},{K},{d},1) "
+                    f"or broadcastable; got {tuple(fc.shape)}"
+                )
+            components = fc
+        else:
+            g = torch.randn(B, K, d, 1, device=xs_b.device)  # (B,K,d,1)
+            if n_dims_truncated is not None and int(n_dims_truncated) < d:
+                g = g.clone()
+                g[:, :, int(n_dims_truncated) :, :] = 0
+            components = g / g.norm(dim=2, keepdim=True).clamp_min(1e-12)
 
         if fixed_cluster_assignments is not None and not isinstance(fixed_cluster_assignments, torch.Tensor):
             fixed_cluster_assignments = torch.tensor(fixed_cluster_assignments, dtype=torch.long, device=xs_b.device)
