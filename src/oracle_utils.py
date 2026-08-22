@@ -86,7 +86,7 @@ def _fit_w_per_batch(seg_x, seg_y, x_query, d, device):
         try:
             if n_prev >= d:
                 wb, _, _, _ = torch.linalg.lstsq(
-                    Xb.T @ Xb + 1e-6 * torch.eye(d, device=device),
+                    Xb.T @ Xb + 0.1 * d * torch.eye(d, device=device),
                     Xb.T @ yb.unsqueeze(1),
                     rcond=None,
                 )
