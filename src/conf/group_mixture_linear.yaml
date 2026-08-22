@@ -21,7 +21,7 @@ training:
     normalize_ys: false
     predict_target_only: false
     shuffle_context_points: false
-    exclude_first_of_segment_loss: true
+    exclude_first_of_segment_loss: false
   batch_size: 64
   learning_rate: 0.0005
   lr_warmup_steps: 300
