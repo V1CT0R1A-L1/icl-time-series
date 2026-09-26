@@ -2,7 +2,9 @@
 Baselines for group_mixture_linear evaluation (collaborator naming).
 
 - **Oracle** (``ground_truth``): knows β_k and cluster assignment.
-- **Bayes** (``true_w_unknown_assignment_bayesian``): knows β_k, infers assignment.
+- **Bayes** (``true_w_unknown_assignment_bayesian``): knows β_k; infers the
+  active component independently on each cluster (context and target). Does
+  not use a permutation prior over context-cluster labels.
 - **Current-task ridge** (``current_task_ridge`` / ``pure_ls_target``): ridge/LS on
   target-cluster history only (same as former “OLS / LS target only”).
 - **History ridge** (``history_ridge``): ridge/LS on all previous points in the
@@ -262,6 +264,15 @@ def compute_ground_truth_mixture_mse_by_position(xs, ys, components, component_a
     return sq_err.mean(dim=0).cpu().numpy()
 
 
+def _parse_bayes_noise(target_noise_std):
+    """Return ``(sigma, noiseless)`` for Gaussian vs min-SSE Bayes."""
+    if target_noise_std is None:
+        return 1.0, False
+    if float(target_noise_std) <= 0.0:
+        return 1.0, True
+    return max(float(target_noise_std), 1e-8), False
+
+
 def compute_true_w_unknown_assignment_bayesian_mse_by_position(
     xs, ys, components, component_assignments, K, C, T_target, scale,
     output_norm_factor=None,
@@ -269,42 +280,84 @@ def compute_true_w_unknown_assignment_bayesian_mse_by_position(
 ):
     """
     Knows the true coefficient vectors ``β_0..β_{K-1}`` (unit-sphere ``components`` × ``scale``)
-    but not **which** component is active in **which** context cluster or in the target.
+    but not which component generated the current cluster.
 
-    Prior: uniform over permutations σ assigning the K components to the K context
-    cluster slots (each component appears once in context, matching the sampler), and
-    uniform τ ∈ {0..K-1} for the target cluster.
+    Each cluster is treated independently: the posterior over ``k`` at sequence
+    index ``t`` uses only the previous ``(x, y)`` pairs **in the same cluster**,
+    with a uniform prior over the ``K`` known coefficients. There is no
+    permutation constraint that each component appears once in context, so
+    context clusters and the target cluster have the same identification
+    problem and similar error curves.
 
     If ``target_noise_std`` is None or > 0: Gaussian likelihood on (x,y) with that σ.
     If ``target_noise_std`` <= 0: **noiseless** — uniform posterior over hypotheses
     with minimum SSE (Bayes limit for σ→0).
 
-    ``component_assignments`` is unused (API parity). Enumeration cost is O(K!·K·T·B);
-    raises if K > 8.
+    ``component_assignments`` is unused (API parity).
     """
-    del output_norm_factor, component_assignments
+    del output_norm_factor, component_assignments, T_target
+    B, T, d = xs.shape
+    del d
+    device = xs.device
+    context_length = K * C
+    sigma_n, noiseless = _parse_bayes_noise(target_noise_std)
+
+    w_all = (components.to(device).squeeze(-1) * scale)  # (B, K, d)
+    w_kb = w_all.permute(1, 0, 2).contiguous()  # (K, B, d) for _posterior_and_predict
+    w_mean = w_all.mean(dim=1)  # (B, d)
+
+    y_pred = torch.zeros(B, T, device=device)
+    cluster_ranges = [(k * C, (k + 1) * C) for k in range(K)]
+    cluster_ranges.append((context_length, T))
+
+    for start, end in cluster_ranges:
+        for t in range(start, end):
+            x_t = xs[:, t]
+            n_prev = t - start
+            if n_prev == 0:
+                y_pred[:, t] = (x_t * w_mean).sum(dim=1)
+            else:
+                y_pred[:, t] = _posterior_and_predict(
+                    xs[:, start:t],
+                    ys[:, start:t],
+                    w_kb,
+                    x_t,
+                    sigma_n,
+                    device,
+                    noiseless=noiseless,
+                )
+
+    return _mse_from_predictions(y_pred, ys)
+
+
+def compute_true_w_permutation_assignment_bayesian_mse_by_position(
+    xs, ys, components, component_assignments, K, C, T_target, scale,
+    output_norm_factor=None,
+    target_noise_std=1.0,
+):
+    """
+    Legacy Bayes: uniform prior over **permutations** of components onto the K
+    context slots (each component appears once), then uniform τ for the target.
+    Later context clusters are easier because remaining labels are constrained.
+    Prefer ``compute_true_w_unknown_assignment_bayesian_mse_by_position``.
+    """
+    del output_norm_factor, component_assignments, T_target
     if K > 8:
         raise ValueError(
-            "compute_true_w_unknown_assignment_bayesian_mse_by_position: K>8 makes K! "
+            "compute_true_w_permutation_assignment_bayesian_mse_by_position: K>8 makes K! "
             "enumeration too large; reduce K or skip this baseline."
         )
 
     B, T, d = xs.shape
+    del d
     device = xs.device
     context_length = K * C
-    if target_noise_std is None:
-        sigma_n, noiseless = 1.0, False
-    elif float(target_noise_std) <= 0.0:
-        sigma_n, noiseless = 1.0, True
-    else:
-        sigma_n, noiseless = float(target_noise_std), False
-    sigma_n = max(sigma_n, 1e-8)
+    sigma_n, noiseless = _parse_bayes_noise(target_noise_std)
 
     perms = list(itertools.permutations(range(K)))
     n_perm = len(perms)
 
-    components = components.to(device)
-    w_all = (components.squeeze(-1) * scale).to(device)
+    w_all = (components.to(device).squeeze(-1) * scale)
 
     y_pred = torch.zeros(B, T, device=device)
 
